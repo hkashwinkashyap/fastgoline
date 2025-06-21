@@ -145,10 +145,6 @@ func main() {
 }
 ```
 
-Here’s the updated `README.md` with the example output section added:
-
----
-
 ## 🧪 Example Output
 
 ```txt
