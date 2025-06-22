@@ -1,4 +1,4 @@
-package fgl
+package fglpipeline
 
 import (
 	"context"

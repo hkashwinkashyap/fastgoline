@@ -1,7 +1,8 @@
-package fgl
+package fglpipeline
 
 import (
 	"context"
+	fglstage "fastgoline/fgl/stage"
 	"fastgoline/util"
 	"fmt"
 	"sync"
@@ -12,7 +13,7 @@ import (
 // Each stage runs concurrently, passing data along channels.
 type Pipeline[T any] struct {
 	id     string
-	Stages []Stage[T]
+	Stages []fglstage.Stage[T]
 	In     <-chan T
 	Out    chan<- T
 }
@@ -80,7 +81,7 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) error {
 // processStageTransform goroutine
 // It reads from the input channel, processes data, and sends results to the output channel.
 // It returns an error if any stage fails.
-func processStageTransform[T any](ctx context.Context, stage Stage[T], in <-chan T, out chan<- T, wg *sync.WaitGroup) error {
+func processStageTransform[T any](ctx context.Context, stage fglstage.Stage[T], in <-chan T, out chan<- T, wg *sync.WaitGroup) error {
 	go func() {
 		defer wg.Done()
 		defer close(out)
@@ -96,14 +97,14 @@ func processStageTransform[T any](ctx context.Context, stage Stage[T], in <-chan
 }
 
 // AddStage appends a processing stage to the pipeline.
-func (pipeline *Pipeline[T]) AddStage(stage Stage[T]) {
+func (pipeline *Pipeline[T]) AddStage(stage fglstage.Stage[T]) {
 	pipeline.Stages = append(pipeline.Stages, stage)
 }
 
 // RemoveStage removes a processing stage from the pipeline.
-func (pipeline *Pipeline[T]) RemoveStage(stage Stage[T]) {
+func (pipeline *Pipeline[T]) RemoveStage(stage fglstage.Stage[T]) {
 	for index, stageItem := range pipeline.Stages {
-		if stageItem.id == stage.id {
+		if stageItem.Id == stage.Id {
 			pipeline.Stages = append(pipeline.Stages[:index], pipeline.Stages[index+1:]...)
 			break
 		}

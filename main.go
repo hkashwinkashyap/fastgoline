@@ -2,7 +2,8 @@ package main
 
 import (
 	"context"
-	"fastgoline/fgl"
+	fglpipeline "fastgoline/fgl/pipeline"
+	fglstage "fastgoline/fgl/stage"
 	"fmt"
 	"math"
 	"sync"
@@ -14,7 +15,7 @@ func main() {
 	in := make(chan float64)
 	out := make(chan float64, 3)
 
-	pipeline := fgl.NewPipeline[float64](in, out)
+	pipeline := fglpipeline.NewPipeline[float64](in, out)
 
 	wg := sync.WaitGroup{}
 	wg.Add(1)
@@ -23,29 +24,29 @@ func main() {
 	in2 := make(chan float64)
 	out2 := make(chan float64, 3)
 
-	pipeline2 := fgl.NewPipeline[float64](in2, out2)
+	pipeline2 := fglpipeline.NewPipeline[float64](in2, out2)
 
 	wg2 := sync.WaitGroup{}
 	wg2.Add(1)
 
 	// Define stage functions
-	multiplyBy2 := fgl.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
-		for value := range in {
-			out <- value * 2
-		}
+	// multiplyBy2 := fglstage.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
+	// 	for value := range in {
+	// 		out <- value * 2
+	// 	}
 
-		return nil
-	})
+	// 	return nil
+	// })
 
-	percentage := fgl.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
-		for value := range in {
-			out <- value / 100
-		}
+	// percentage := fgl.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
+	// 	for value := range in {
+	// 		out <- value / 100
+	// 	}
 
-		return nil
-	})
+	// 	return nil
+	// })
 
-	total := fgl.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
+	total := fglstage.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
 		var total float64
 		for value := range in {
 			total += value
@@ -55,21 +56,38 @@ func main() {
 		return nil
 	})
 
+	// // Add stages to the pipeline
+	// pipeline.AddStage(fgl.NewStage[float64](multiplyBy2))
+	// pipeline.AddStage(fgl.NewStage[float64](percentage))
+	// pipeline.AddStage(fgl.NewStage[float64](total))
+
+	// // Add stages to the pipeline2 (reused stages)
+	// pipeline2.AddStage(fgl.NewStage[float64](multiplyBy2))
+	// pipeline2.AddStage(fgl.NewStage[float64](total))
+
+	multiplyBy2 := fglstage.NewStageFunction[float64](func(value float64) float64 {
+		return value * 2
+	})
+
+	percentage := fglstage.NewStageFunction[float64](func(value float64) float64 {
+		return value / 100
+	})
+
 	// Add stages to the pipeline
-	pipeline.AddStage(fgl.NewStage[float64](multiplyBy2))
-	pipeline.AddStage(fgl.NewStage[float64](percentage))
-	pipeline.AddStage(fgl.NewStage[float64](total))
+	pipeline.AddStage(multiplyBy2)
+	pipeline.AddStage(fglstage.NewStage[float64](total))
+	pipeline.AddStage(percentage)
 
 	// Add stages to the pipeline2 (reused stages)
-	pipeline2.AddStage(fgl.NewStage[float64](multiplyBy2))
-	pipeline2.AddStage(fgl.NewStage[float64](total))
+	pipeline2.AddStage(multiplyBy2)
+	pipeline2.AddStage(fglstage.NewStage[float64](total))
 
 	// Log starting the pipeline
 	time1 := time.Now().UTC()
 	fmt.Printf("Starting pipelines at %s\n", time1)
 
 	// Kick off the pipelines in parallel
-	job := fgl.PipelineJob[float64]{}
+	job := fglpipeline.PipelineJob[float64]{}
 
 	job.AddPipeline(pipeline)
 	job.AddPipeline(pipeline2)

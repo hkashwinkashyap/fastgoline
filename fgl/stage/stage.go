@@ -1,4 +1,4 @@
-package fgl
+package fglstage
 
 import (
 	"context"
@@ -7,7 +7,7 @@ import (
 
 // Stage represents a single stage in the pipeline.
 type Stage[T any] struct {
-	id                string
+	Id                string
 	TransformFunction StageTransformFunction[T]
 }
 
@@ -22,10 +22,26 @@ func NewStage[T any](stageTransformFunction StageTransformFunction[T]) Stage[T] 
 	// Generate a unique id
 	id := util.GenerateUUID()
 
-	return Stage[T]{id: id, TransformFunction: stageTransformFunction}
+	return Stage[T]{Id: id, TransformFunction: stageTransformFunction}
 }
 
 // GetID returns the ID of the stage.
 func (stage *Stage[T]) GetID() string {
-	return stage.id
+	return stage.Id
+}
+
+// NewStageFunction creates a new Stage instance.
+// It takes in the transformation function as a parameter.
+// Returns a Stage instance with a unique generated ID and the provided StageTransformFunction.
+func NewStageFunction[T any](fn func(T) T) Stage[T] {
+	transformFunction := func(ctx context.Context, in <-chan T, out chan<- T) error {
+		for value := range in {
+			out <- fn(value)
+		}
+
+		return nil
+	}
+
+	// Return a new stage instance with the provided transformation function
+	return NewStage(transformFunction)
 }
