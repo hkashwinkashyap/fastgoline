@@ -36,12 +36,14 @@ package main
 
 import (
 	"context"
-	fglpipeline "fastgoline/fgl/pipeline"
-	fglstage "fastgoline/fgl/stage"
 	"fmt"
 	"math"
 	"sync"
 	"time"
+
+	fglstage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
+
+	fglpipeline "github.com/hkashwinkashyap/fastgoline/fgl/pipeline"
 )
 
 func main() {
