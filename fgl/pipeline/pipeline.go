@@ -2,11 +2,13 @@ package fglpipeline
 
 import (
 	"context"
-	fglstage "fastgoline/fgl/stage"
-	"fastgoline/util"
 	"fmt"
 	"sync"
 	"time"
+
+	fglstage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
+
+	"github.com/hkashwinkashyap/fastgoline/util"
 )
 
 // Pipeline holds a sequence of stages to process data.

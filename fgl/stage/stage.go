@@ -2,7 +2,8 @@ package fglstage
 
 import (
 	"context"
-	"fastgoline/util"
+
+	"github.com/hkashwinkashyap/fastgoline/util"
 )
 
 // Stage represents a single stage in the pipeline.

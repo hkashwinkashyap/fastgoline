@@ -1,4 +1,4 @@
-module fastgoline
+module github.com/hkashwinkashyap/fastgoline
 
 go 1.24.4
 
