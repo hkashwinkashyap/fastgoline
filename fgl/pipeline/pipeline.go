@@ -1,4 +1,4 @@
-package fglpipeline
+package fgl_pipeline
 
 import (
 	"context"
@@ -6,7 +6,7 @@ import (
 	"sync"
 	"time"
 
-	fglstage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
+	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
 
 	"github.com/hkashwinkashyap/fastgoline/util"
 )
@@ -14,10 +14,12 @@ import (
 // Pipeline holds a sequence of stages to process data.
 // Each stage runs concurrently, passing data along channels.
 type Pipeline[T any] struct {
-	id     string
-	Stages []fglstage.Stage[T]
-	In     <-chan T
-	Out    chan<- T
+	id            string
+	Stages        []fgl_stage.Stage[T]
+	In            <-chan T
+	Out           chan<- T
+	EnableForking bool
+	ForkRegistry  map[string]fgl_stage.Stage[T]
 }
 
 // GetID returns the ID of the pipeline.
@@ -30,7 +32,7 @@ func NewPipeline[T any](in <-chan T, out chan<- T) *Pipeline[T] {
 	// Generate a unique id
 	id := util.GenerateUUID()
 
-	return &Pipeline[T]{id: id, Stages: nil, In: in, Out: out}
+	return &Pipeline[T]{id: id, Stages: nil, In: in, Out: out, EnableForking: false, ForkRegistry: nil}
 }
 
 // RunPipeline runs the pipeline to process data.
@@ -83,7 +85,7 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) error {
 // processStageTransform goroutine
 // It reads from the input channel, processes data, and sends results to the output channel.
 // It returns an error if any stage fails.
-func processStageTransform[T any](ctx context.Context, stage fglstage.Stage[T], in <-chan T, out chan<- T, wg *sync.WaitGroup) error {
+func processStageTransform[T any](ctx context.Context, stage fgl_stage.Stage[T], in <-chan T, out chan<- T, wg *sync.WaitGroup) error {
 	go func() {
 		defer wg.Done()
 		defer close(out)
@@ -99,12 +101,12 @@ func processStageTransform[T any](ctx context.Context, stage fglstage.Stage[T], 
 }
 
 // AddStage appends a processing stage to the pipeline.
-func (pipeline *Pipeline[T]) AddStage(stage fglstage.Stage[T]) {
+func (pipeline *Pipeline[T]) AddStage(stage fgl_stage.Stage[T]) {
 	pipeline.Stages = append(pipeline.Stages, stage)
 }
 
 // RemoveStage removes a processing stage from the pipeline.
-func (pipeline *Pipeline[T]) RemoveStage(stage fglstage.Stage[T]) {
+func (pipeline *Pipeline[T]) RemoveStage(stage fgl_stage.Stage[T]) {
 	for index, stageItem := range pipeline.Stages {
 		if stageItem.Id == stage.Id {
 			pipeline.Stages = append(pipeline.Stages[:index], pipeline.Stages[index+1:]...)

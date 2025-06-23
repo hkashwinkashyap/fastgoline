@@ -1,4 +1,4 @@
-package fglstage
+package fgl_stage
 
 import (
 	"context"
