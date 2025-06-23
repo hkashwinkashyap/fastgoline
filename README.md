@@ -153,13 +153,13 @@ func main() {
 ## 🧪 Example Output
 
 ```txt
-Starting pipelines at 2025-06-22 17:23:14.494245 +0000 UTC
+Starting pipelines at 2025-06-23 18:41:59.260922 +0000 UTC
 Running 2 pipelines in parallel...
-Starting pipeline 0000XSNJG0MQJHBF4QX1EFD6Y3 at 2025-06-22 17:23:14.494407 +0000 UTC
-Starting pipeline 0000XSNJG0MQJHBF4QX1EFD6Y3 at 2025-06-22 17:23:14.494405 +0000 UTC
+Starting pipeline fe49c132-4916-499d-909f-91772917caab at 2025-06-23 18:41:59.261018 +0000 UTC
+Starting pipeline 55a50a03-2300-454f-bb5e-97142b9a92b0 at 2025-06-23 18:41:59.261024 +0000 UTC
+Finished Pipeline fe49c132-4916-499d-909f-91772917caab in 230 ms
 Final result (pipeline2): -9.99997e+11
-Finished Pipeline 0000XSNJG0MQJHBF4QX1EFD6Y3 in 243 ms
-Finished Pipeline 0000XSNJG0MQJHBF4QX1EFD6Y3 in 2812 ms
+Finished Pipeline 55a50a03-2300-454f-bb5e-97142b9a92b0 in 2783 ms
 Final result (pipeline1): 1.0000019e+13
 ```
 
