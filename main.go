@@ -7,158 +7,112 @@ import (
 	"sync"
 	"time"
 
-	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
-
+	"github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_pipeline "github.com/hkashwinkashyap/fastgoline/fgl/pipeline"
+	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
 )
 
 func main() {
-	// Create a new pipeline
-	in := make(chan float64)
-	out := make(chan float64, 3)
+	var wg sync.WaitGroup
+	wg.Add(2)
 
-	pipeline := fgl_pipeline.NewPipeline[float64](in, out)
+	// Pipeline 1 setup
+	in1 := make(chan metadata.InputMetadata[float64])
+	out1 := make(chan metadata.OutputMetadata[float64], 100)
+	pipeline1 := fgl_pipeline.NewPipeline[float64](in1, out1, false)
 
-	wg := sync.WaitGroup{}
-	wg.Add(1)
+	// Pipeline 2 setup
+	in2 := make(chan metadata.InputMetadata[float64])
+	out2 := make(chan metadata.OutputMetadata[float64], 100)
+	pipeline2 := fgl_pipeline.NewPipeline[float64](in2, out2, false)
 
-	// Pipeline 2
-	in2 := make(chan float64)
-	out2 := make(chan float64, 3)
+	// Define simple processing stages
+	multiplyBy2 := fgl_stage.NewStageFunction[float64](func(v float64) float64 {
+		return v * 2
+	})
 
-	pipeline2 := fgl_pipeline.NewPipeline[float64](in2, out2)
+	percentage := fgl_stage.NewStageFunction[float64](func(v float64) float64 {
+		return v / 100
+	})
 
-	wg2 := sync.WaitGroup{}
-	wg2.Add(1)
+	// Define a custom total stage (accumulate all values)
+	total := fgl_stage.NewStage[float64](func(ctx context.Context, in <-chan metadata.InputMetadata[float64], out chan<- metadata.OutputMetadata[float64]) error {
+		var sum float64
+		var id string
+		var start time.Time
 
-	// Define stage functions
-	// multiplyBy2 := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
-	// 	for value := range in {
-	// 		out <- value * 2
-	// 	}
-
-	// 	return nil
-	// })
-
-	// percentage := fgl.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
-	// 	for value := range in {
-	// 		out <- value / 100
-	// 	}
-
-	// 	return nil
-	// })
-
-	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in <-chan float64, out chan<- float64) error {
-		var total float64
-		for value := range in {
-			total += value
+		for v := range in {
+			if id == "" {
+				id = v.Id
+				start = v.InputTime
+			}
+			sum += v.Value
 		}
 
-		out <- math.Floor(total*100) / 100
+		out <- metadata.OutputMetadata[float64]{
+			InputID:    id,
+			Value:      math.Floor(sum*100) / 100,
+			InputTime:  start,
+			OutputTime: time.Now(),
+			Duration:   time.Since(start).Milliseconds(),
+		}
 		return nil
 	})
 
-	// // Add stages to the pipeline
-	// pipeline.AddStage(fgl.NewStage[float64](multiplyBy2))
-	// pipeline.AddStage(fgl.NewStage[float64](percentage))
-	// pipeline.AddStage(fgl.NewStage[float64](total))
+	// Add stages to pipeline1 and pipeline2
+	pipeline1.AddStage(multiplyBy2)
+	pipeline1.AddStage(percentage)
+	pipeline1.AddStage(total)
 
-	// // Add stages to the pipeline2 (reused stages)
-	// pipeline2.AddStage(fgl.NewStage[float64](multiplyBy2))
-	// pipeline2.AddStage(fgl.NewStage[float64](total))
-
-	multiplyBy2 := fgl_stage.NewStageFunction[float64](func(value float64) float64 {
-		return value * 2
-	})
-
-	percentage := fgl_stage.NewStageFunction[float64](func(value float64) float64 {
-		return value / 100
-	})
-
-	// Add stages to the pipeline
-	pipeline.AddStage(multiplyBy2)
-	pipeline.AddStage(fgl_stage.NewStage[float64](total))
-	pipeline.AddStage(percentage)
-
-	// Add stages to the pipeline2 (reused stages)
+	pipeline2.AddStage(percentage)
 	pipeline2.AddStage(multiplyBy2)
-	pipeline2.AddStage(fgl_stage.NewStage[float64](total))
+	pipeline2.AddStage(total)
 
-	// Log starting the pipeline
-	time1 := time.Now().UTC()
-	fmt.Printf("Starting pipelines at %s\n", time1)
-
-	// Kick off the pipelines in parallel
-	job := fgl_pipeline.PipelineJob[float64]{}
-
-	job.AddPipeline(pipeline)
-	job.AddPipeline(pipeline2)
-
-	// Run all pipelines in parallel
-	job.RunPipelinesInParallel(context.Background())
-
-	// // Start pipeline in a goroutine
-	// go func() {
-	// 	err := pipeline.RunPipeline(context.Background())
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// }()
-
-	// // Log starting the pipeline2
-	// time2 := time.Now().UTC()
-	// fmt.Printf("Starting pipeline2 at %s\n", time2.String())
-
-	// // Start pipeline2 in a goroutine
-	// go func() {
-	// 	err := pipeline2.RunPipeline(context.Background())
-	// 	if err != nil {
-	// 		panic(err)
-	// 	}
-	// }()
-
-	// Send input values in a goroutine
+	// Run pipeline1
 	go func() {
-		intialValue := 10.0
-
-		// Send input values to pipeline1
-		for i := 0; i < 10000000; i++ {
-			in <- intialValue * 10.0
-			intialValue += 1.0
+		if err := pipeline1.RunPipeline(context.Background()); err != nil {
+			panic(err)
 		}
-
-		close(in)
-	}()
-
-	go func() {
-		intialValue := 10.0
-
-		// Send input values to pipeline2
-		for i := 0; i < 1000000; i++ {
-			in2 <- intialValue / 10.0
-			intialValue -= 10.0
-		}
-
-		close(in2)
-	}()
-
-	go func() {
-		for result := range out {
-			fmt.Printf("Final result: %v\n", result)
-		}
-
 		wg.Done()
 	}()
 
-	wg.Wait()
-
+	// Run pipeline2
 	go func() {
-		for result := range out2 {
-			fmt.Printf("Final result2: %v\n", result)
+		if err := pipeline2.RunPipeline(context.Background()); err != nil {
+			panic(err)
 		}
-
-		wg2.Done()
+		wg.Done()
 	}()
 
-	wg2.Wait()
+	// Send input data to pipeline1
+	go func() {
+		for i := 1.0; i <= 10000; i++ {
+			in1 <- metadata.NewInputMetadata(i)
+		}
+		close(in1)
+	}()
+
+	// Send input data to pipeline2
+	go func() {
+		for i := 10000.0; i >= 1; i-- {
+			in2 <- metadata.NewInputMetadata(i)
+		}
+		close(in2)
+	}()
+
+	// Read output from pipeline1
+	go func() {
+		for result := range out1 {
+			fmt.Printf("Pipeline1 Output: %+v\n", result)
+		}
+	}()
+
+	// Read output from pipeline2
+	go func() {
+		for result := range out2 {
+			fmt.Printf("Pipeline2 Output: %+v\n", result)
+		}
+	}()
+
+	wg.Wait()
 }
