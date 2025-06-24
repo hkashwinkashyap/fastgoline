@@ -19,7 +19,7 @@ type InputMetadata[T any] struct {
 func NewInputMetadata[T any](value T) InputMetadata[T] {
 	id := util.GenerateUUID()
 
-	inputTime := time.Now()
+	inputTime := time.Now().UTC()
 
 	return InputMetadata[T]{
 		Id:        id,
@@ -30,6 +30,8 @@ func NewInputMetadata[T any](value T) InputMetadata[T] {
 
 // OutputMetadata is the output struct of a pipeline
 // It contains the input ID, output value, input time, output time, duration and error
+// Duration is in nanoseconds
+// NOTE: OutputTime will be invalid if the last stage is an aggregation transformation
 type OutputMetadata[T any] struct {
 	InputID    string
 	Value      T

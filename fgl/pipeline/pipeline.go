@@ -96,39 +96,13 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) error {
 				return err
 			}
 
-			channelChainWg := sync.WaitGroup{}
-			channelChainWg.Add(1)
-
-			nextIn := make(chan metadata.InputMetadata[T])
-
-			// TODO: Fix the intermediate channel chain
-			go func() {
-				defer channelChainWg.Done()
-				fmt.Println("Ocha paina")
-
-				for outMeta := range currentOut {
-					nextIn <- metadata.InputMetadata[T]{
-						Id:        outMeta.InputID,
-						Value:     outMeta.Value,
-						InputTime: outMeta.InputTime,
-					}
-
-					return
-				}
-			}()
-
-			channelChainWg.Wait()
-			fmt.Println("ocha")
-
 			// Current output channel becomes the next input channel
-			currentIn = nextIn
+			currentIn = convertCurrentOutToNextIn(currentOut)
 		}
 	}
 
 	// Wait for all stages to finish
 	wg.Wait()
-
-	fmt.Println("Aindi")
 
 	// Mark the pipeline as completed
 	pipeline.CompletedAt = time.Now().UTC()
@@ -142,11 +116,9 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) error {
 // This is used to pipe the output of a stage to the input of the next intermediate stage
 func convertCurrentOutToNextIn[T any](currentOut <-chan metadata.OutputMetadata[T]) <-chan metadata.InputMetadata[T] {
 	nextIn := make(chan metadata.InputMetadata[T])
-	var wg sync.WaitGroup
-	wg.Add(1)
 
 	go func() {
-		defer wg.Done()
+		defer close(nextIn)
 
 		for outMeta := range currentOut {
 			nextIn <- metadata.InputMetadata[T]{
@@ -156,13 +128,6 @@ func convertCurrentOutToNextIn[T any](currentOut <-chan metadata.OutputMetadata[
 			}
 		}
 	}()
-
-	fmt.Println("Ainda lopala")
-
-	// Wait for the goroutine to finish
-	wg.Wait()
-
-	fmt.Println("Aindi lopala baita")
 
 	// Return the next input channel
 	return nextIn
@@ -216,7 +181,7 @@ func NewForkedPipeline[T any](input metadata.InputMetadata[T], stages []fgl_stag
 		ForkedInput:   &input,
 		Stages:        stages,
 		Done:          make(chan struct{}),
-		StartedAt:     time.Now(),
+		StartedAt:     time.Now().UTC(),
 		OutputChannel: out,
 	}
 }
@@ -279,7 +244,7 @@ outer:
 	// Wait for all goroutines to finish
 	wg.Wait()
 
-	forkedPipeline.CompletedAt = time.Now()
+	forkedPipeline.CompletedAt = time.Now().UTC()
 	duration := forkedPipeline.CompletedAt.Sub(forkedAt).Milliseconds()
 	totalDuration := forkedPipeline.CompletedAt.Sub(forkedPipeline.StartedAt).Milliseconds()
 

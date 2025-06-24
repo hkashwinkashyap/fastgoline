@@ -44,8 +44,8 @@ func NewStageFunction[T any](fn func(T) T) Stage[T] {
 				InputID:    value.Id,
 				Value:      fn(value.Value),
 				InputTime:  value.InputTime,
-				OutputTime: time.Now(),
-				Duration:   time.Since(value.InputTime).Milliseconds(),
+				OutputTime: time.Now().UTC(),
+				Duration:   time.Since(value.InputTime).Abs().Nanoseconds(),
 				Err:        nil,
 			}
 		}
