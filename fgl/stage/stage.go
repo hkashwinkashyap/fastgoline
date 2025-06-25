@@ -17,7 +17,7 @@ type Stage[T any] struct {
 // StageTransformFunction represents a single processing stage transform function in the pipeline.
 // It reads from the input channel, processes data, and sends results to the output channel.
 // It returns an error if any stage fails.
-type StageTransformFunction[T any] func(ctx context.Context, in <-chan metadata.InputMetadata[T], out chan<- metadata.OutputMetadata[T]) error
+type StageTransformFunction[T any] func(ctx context.Context, in chan metadata.InputMetadata[T], out chan metadata.OutputMetadata[T]) error
 
 // NewStage creates a new Stage instance.
 // Returns a Stage instance with a unique generated ID and the provided StageTransformFunction.
@@ -37,7 +37,7 @@ func (stage *Stage[T]) GetID() string {
 // It takes in the transformation function as a parameter.
 // Returns a Stage instance with a unique generated ID and the provided StageTransformFunction.
 func NewStageFunction[T any](fn func(T) T) Stage[T] {
-	transformFunction := func(ctx context.Context, in <-chan metadata.InputMetadata[T], out chan<- metadata.OutputMetadata[T]) error {
+	transformFunction := func(ctx context.Context, in chan metadata.InputMetadata[T], out chan metadata.OutputMetadata[T]) error {
 		for value := range in {
 			// Format the output metadata and send it to the output channel
 			out <- metadata.OutputMetadata[T]{

@@ -36,9 +36,6 @@ func (pipelineJob *PipelineJob[T]) RunPipelinesInParallel(ctx context.Context) {
 
 		fmt.Println("Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
 
-		// Create a channel to collect errors
-		errChan := make(chan error, len(pipelineJob.Pipelines))
-
 		// Loop through all pipelines
 		for _, pipeline := range pipelineJob.Pipelines {
 			// Kick off a goroutine for each pipeline
@@ -46,21 +43,11 @@ func (pipelineJob *PipelineJob[T]) RunPipelinesInParallel(ctx context.Context) {
 				defer wg.Done()
 
 				// Run the pipeline
-				err := pipeline.RunPipeline(ctx)
-				if err != nil {
-					// Send the error to the error channel
-					errChan <- err
-				}
+				pipeline.RunPipeline(ctx)
 			}(&pipeline)
 		}
 
 		wg.Wait()
-		close(errChan)
-
-		// Collect and return first error
-		if len(errChan) > 0 {
-			panic(<-errChan)
-		}
 
 		// Return success
 		ctx.Done()

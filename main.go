@@ -6,30 +6,30 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hkashwinkashyap/fastgoline/fgl/metadata"
+	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_pipeline "github.com/hkashwinkashyap/fastgoline/fgl/pipeline"
 	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
 )
 
 func main() {
 	// Channels for pipeline 1
-	in := make(chan metadata.InputMetadata[float64])
-	out := make(chan metadata.OutputMetadata[float64], 3)
+	in := make(chan fgl_metadata.InputMetadata[float64])
+	out := make(chan fgl_metadata.OutputMetadata[float64])
 
-	pipeline1 := fgl_pipeline.NewPipeline[float64](in, out, false)
+	pipeline1 := fgl_pipeline.NewPipeline[float64](in, out, true)
 
 	// Channels for pipeline 2
-	in2 := make(chan metadata.InputMetadata[float64])
-	out2 := make(chan metadata.OutputMetadata[float64], 3)
+	in2 := make(chan fgl_metadata.InputMetadata[float64])
+	out2 := make(chan fgl_metadata.OutputMetadata[float64])
 
 	pipeline2 := fgl_pipeline.NewPipeline[float64](in2, out2, false)
 
 	// Define reusable stage using StageTransformFunction
 	// This is used when you want full control over input and output channels,
 	// such as for aggregations (sum, average, filtering, etc.)
-	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in <-chan metadata.InputMetadata[float64], out chan<- metadata.OutputMetadata[float64]) error {
+	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in chan fgl_metadata.InputMetadata[float64], out chan fgl_metadata.OutputMetadata[float64]) error {
 		var total float64
-		var output metadata.OutputMetadata[float64]
+		var output fgl_metadata.OutputMetadata[float64]
 
 		for value := range in {
 			output.InputID = value.Id
@@ -79,40 +79,54 @@ func main() {
 	wg.Add(2)
 
 	go func() {
-		intialValue := 10.0
+		intialValue := 0.0
+		defer close(in)
 
 		// Send input values to pipeline1
-		for i := 0; i < 10000000; i++ {
-			in <- metadata.NewInputMetadata(intialValue * 10.0)
-			intialValue += 1.0
+		for i := 0; i < 100000; i++ {
+			in <- fgl_metadata.NewInputMetadata(intialValue * 10.0)
+			// Add delay
+			time.Sleep(time.Second * 1)
+			intialValue += 10.0
 		}
-
-		close(in)
 	}()
 
 	go func() {
 		intialValue := 10.0
+		defer close(in2)
 
 		// Send input values to pipeline2
-		for i := 0; i < 1000000; i++ {
-			in2 <- metadata.NewInputMetadata(intialValue / 10.0)
+		for i := 0; i < 100; i++ {
+			in2 <- fgl_metadata.NewInputMetadata(intialValue / 10.0)
+			// Add delay
+			time.Sleep(time.Second * 1)
 			intialValue -= 10.0
 		}
-
-		close(in2)
 	}()
 
 	go func() {
+		counter := 0
 		for result := range out {
 			fmt.Printf("Final result (pipeline1): %+v\n", result)
+			counter++
+
+			if counter == 100000 {
+				break
+			}
 		}
 
 		wg.Done()
 	}()
 
 	go func() {
+		counter := 0
 		for result := range out2 {
 			fmt.Printf("Final result (pipeline2): %+v\n", result)
+			counter++
+
+			if counter == 100 {
+				break
+			}
 		}
 
 		wg.Done()
