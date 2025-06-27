@@ -4,17 +4,26 @@ import (
 	"context"
 	"fmt"
 	"sync"
+
+	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
 )
 
 // PipelineJob represents a job to run a pipeline.
 // It contains an arrray of pipelines to run in parallel.
 type PipelineJob[T any] struct {
 	Pipelines []Pipeline[T]
+	Config    fgl_config.Config
 }
 
 // NewPipelineJob creates a new PipelineJob instance.
-func NewPipelineJob[T any]() *PipelineJob[T] {
-	return &PipelineJob[T]{}
+func NewPipelineJob[T any](config *fgl_config.Config) *PipelineJob[T] {
+	if config == nil {
+		config = fgl_config.InitialiseConfig()
+	}
+
+	return &PipelineJob[T]{
+		Config: *config,
+	}
 }
 
 // AddPipeline adds a pipeline to the job.
@@ -34,7 +43,9 @@ func (pipelineJob *PipelineJob[T]) RunPipelinesInParallel(ctx context.Context) {
 		var wg sync.WaitGroup
 		wg.Add(len(pipelineJob.Pipelines))
 
-		fmt.Println("Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
+		if pipelineJob.Config.LogLevel == "DEBUG" {
+			fmt.Println("TRACE: Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
+		}
 
 		// Loop through all pipelines
 		for _, pipeline := range pipelineJob.Pipelines {

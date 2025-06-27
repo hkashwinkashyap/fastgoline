@@ -6,10 +6,11 @@ import (
 	"sync"
 	"time"
 
-	"github.com/hkashwinkashyap/fastgoline/fgl/metadata"
+	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
+	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
 
-	"github.com/hkashwinkashyap/fastgoline/util"
+	fgl_util "github.com/hkashwinkashyap/fastgoline/util"
 )
 
 // Pipeline holds a sequence of stages to process data.
@@ -17,15 +18,12 @@ import (
 type Pipeline[T any] struct {
 	id            string
 	Stages        []fgl_stage.Stage[T]
-	InputChannel  chan metadata.InputMetadata[T]
-	OutputChannel chan metadata.OutputMetadata[T]
-	EnableForking bool
-	ForkedInput   *metadata.InputMetadata[T]
+	InputChannel  chan fgl_metadata.InputMetadata[T]
+	OutputChannel chan fgl_metadata.OutputMetadata[T]
 	Done          chan struct{}
 	StartedAt     time.Time
 	CompletedAt   time.Time
-	ForkedAt      *time.Time
-	ForkRegistry  map[string]fgl_stage.Stage[T]
+	Config        fgl_config.Config
 }
 
 // GetID returns the ID of the pipeline.
@@ -34,29 +32,21 @@ func (pipeline *Pipeline[T]) GetID() string {
 }
 
 // NewPipeline creates an empty pipeline instance.
-func NewPipeline[T any](in chan metadata.InputMetadata[T], out chan metadata.OutputMetadata[T], enableForking bool) *Pipeline[T] {
+func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_metadata.OutputMetadata[T], config *fgl_config.Config) *Pipeline[T] {
 	// Generate a unique id
-	id := util.GenerateUUID()
+	id := fgl_util.GenerateUUID()
 
-	// If forking is enabled return a forked pipeline
-	if enableForking {
-		return &Pipeline[T]{
-			id:            id,
-			Stages:        nil,
-			InputChannel:  in,
-			OutputChannel: out,
-			EnableForking: enableForking,
-			ForkRegistry:  make(map[string]fgl_stage.Stage[T]),
-			Done:          make(chan struct{}),
-		}
+	if config == nil {
+		config = fgl_config.InitialiseConfig()
 	}
 
-	// If forking is not enabled return a normal pipeline
+	// Return a new pipeline instance
 	return &Pipeline[T]{id: id,
 		Stages: nil, InputChannel: in,
 		OutputChannel: out,
-		EnableForking: enableForking,
-		ForkRegistry:  nil,
+		Done:          make(chan struct{}),
+		StartedAt:     time.Now().UTC(),
+		Config:        *config,
 	}
 }
 
@@ -65,9 +55,17 @@ func NewPipeline[T any](in chan metadata.InputMetadata[T], out chan metadata.Out
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 	// Loop through each input coming from the input channel and process it through the pipeline
 	for inputValue := range pipeline.InputChannel {
-		go func(metadata.InputMetadata[T]) {
+		go func(inputValue fgl_metadata.InputMetadata[T]) {
 			now := time.Now().UTC()
-			fmt.Printf("TRACE: Starting pipeline %s at %s with input %+v\n", pipeline.id, now, inputValue)
+			inputValue.InitialInput = &fgl_metadata.InitialInput[T]{
+				Id:        fgl_util.GenerateUUID(),
+				Value:     inputValue.Value,
+				InputTime: now,
+			}
+
+			if pipeline.Config.LogLevel == "DEBUG" {
+				fmt.Printf("TRACE: Starting pipeline %s with input - {Id: %s, Value: %+v, InputTime: %s}\n", pipeline.id, inputValue.InitialInput.Id, inputValue.InitialInput.Value, inputValue.InitialInput.InputTime)
+			}
 
 			var err error
 			var wg sync.WaitGroup
@@ -76,12 +74,12 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 			wg.Add(len(pipeline.Stages))
 
 			// Pipe in the inputValue to the first stage
-			currentIn := make(chan metadata.InputMetadata[T], 1)
+			currentIn := make(chan fgl_metadata.InputMetadata[T], 1)
 			currentIn <- inputValue
 
 			for index, stage := range pipeline.Stages {
 				// Current output channel is the intermediate output channel used to chain the stages thorughout the pipeline
-				currentOut := make(chan metadata.OutputMetadata[T], 1)
+				currentOut := make(chan fgl_metadata.OutputMetadata[T], 1)
 
 				isFinal := index == len(pipeline.Stages)-1
 
@@ -91,6 +89,7 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 					err = processStageTransform(ctx, stage, currentIn, pipeline.OutputChannel, &wg)
 					if err != nil {
 						ctx.Done()
+						fmt.Printf("ERR: Failed to process final stage of pipeline %s: %s\n", pipeline.id, err.Error())
 						panic(err)
 					}
 				} else {
@@ -102,12 +101,13 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 					err = processStageTransform(ctx, stage, currentIn, currentOut, &wg)
 					if err != nil {
 						ctx.Done()
+						fmt.Printf("ERR: Failed to process intermediate stage of pipeline %s: %s\n", pipeline.id, err.Error())
 						panic(err)
 					}
 
-					// TODO - based on the threshold set, if the duration of the stage is greater than the threshold, fork the pipeline
-					durationToProcessStage := time.Since(startedStageAt).Abs().Nanoseconds()
-					fmt.Printf("TRACE: Processed stage %s in %v nanoseconds\n", stage.GetID(), durationToProcessStage)
+					if pipeline.Config.LogLevel == "DEBUG" {
+						fmt.Printf("TRACE: Processed stage %s in %v nanoseconds\n", stage.GetID(), time.Since(startedStageAt).Abs().Nanoseconds())
+					}
 
 					// Current output channel becomes the next input channel
 					currentIn = convertCurrentOutToNextIn(currentOut)
@@ -121,8 +121,12 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 			pipeline.CompletedAt = time.Now().UTC()
 			pipeline.Done <- struct{}{}
 
-			fmt.Printf("TRACE: Finished Pipeline %s in %v ms with input value %+v\n", pipeline.GetID(), time.Now().UTC().Sub(now).Milliseconds(), inputValue)
+			if pipeline.Config.LogLevel == "DEBUG" {
+				fmt.Printf("TRACE: Finished Pipeline %s in %v ms with input value %+v\n", pipeline.GetID(), time.Now().UTC().Sub(now).Milliseconds(), inputValue)
+			}
+
 			if ctx.Err() != nil {
+				fmt.Printf("ERROR: Pipeline %s failed with error %v\n", pipeline.GetID(), ctx.Err())
 				panic(ctx.Err())
 			}
 		}(inputValue)
@@ -131,17 +135,17 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 
 // convertCurrentOutToNextIn converts output metadata to input metadata
 // This is used to pipe the output of a stage to the input of the next intermediate stage
-func convertCurrentOutToNextIn[T any](currentOut chan metadata.OutputMetadata[T]) chan metadata.InputMetadata[T] {
-	nextIn := make(chan metadata.InputMetadata[T], 1)
+func convertCurrentOutToNextIn[T any](currentOut chan fgl_metadata.OutputMetadata[T]) chan fgl_metadata.InputMetadata[T] {
+	nextIn := make(chan fgl_metadata.InputMetadata[T], 1)
 
 	go func() {
-		// defer close(nextIn)
+		defer close(nextIn)
 
 		for outMeta := range currentOut {
-			nextIn <- metadata.InputMetadata[T]{
-				Id:        outMeta.InputID,
-				Value:     outMeta.Value,
-				InputTime: outMeta.InputTime,
+			nextIn <- fgl_metadata.InputMetadata[T]{
+				InitialInput: &outMeta.InitialInput,
+				Value:        outMeta.OutputValue,
+				InputTime:    outMeta.InitialInput.InputTime,
 			}
 		}
 	}()
@@ -153,7 +157,7 @@ func convertCurrentOutToNextIn[T any](currentOut chan metadata.OutputMetadata[T]
 // processStageTransform goroutine
 // It reads from the input channel, processes data, and sends results to the output channel.
 // It returns an error if the stage fails.
-func processStageTransform[T any](ctx context.Context, stage fgl_stage.Stage[T], in chan metadata.InputMetadata[T], out chan metadata.OutputMetadata[T], wg *sync.WaitGroup) error {
+func processStageTransform[T any](ctx context.Context, stage fgl_stage.Stage[T], in chan fgl_metadata.InputMetadata[T], out chan fgl_metadata.OutputMetadata[T], wg *sync.WaitGroup) error {
 	go func() {
 		defer func() {
 			wg.Done()
@@ -162,7 +166,7 @@ func processStageTransform[T any](ctx context.Context, stage fgl_stage.Stage[T],
 
 		err := stage.TransformFunction(ctx, in, out)
 		if err != nil {
-			fmt.Printf("ERR: %s\n", err.Error())
+			fmt.Printf("ERR: Failed to process stage %s: %s\n", stage.GetID(), err.Error())
 			return
 		}
 	}()
@@ -188,132 +192,4 @@ func (pipeline *Pipeline[T]) RemoveStage(stage fgl_stage.Stage[T]) {
 			break
 		}
 	}
-}
-
-// NewForkedPipeline creates a new forked pipeline instance
-func NewForkedPipeline[T any](input metadata.InputMetadata[T], stages []fgl_stage.Stage[T], out chan metadata.OutputMetadata[T]) *Pipeline[T] {
-	// Generate a unique id
-	id := util.GenerateUUID()
-
-	return &Pipeline[T]{
-		id:            id,
-		ForkedInput:   &input,
-		Stages:        stages,
-		Done:          make(chan struct{}),
-		StartedAt:     time.Now().UTC(),
-		OutputChannel: out,
-	}
-}
-
-// TODO
-// RunForkedPipeline runs the forked pipeline
-// It returns an error if any stage fails
-// Pipes the output metadata to the provided metadata output channel
-func (forkedPipeline *Pipeline[T]) RunForkedPipeline(ctx context.Context) {
-	defer close(forkedPipeline.Done)
-
-	value := forkedPipeline.ForkedInput.Value
-	forkedAt := *forkedPipeline.ForkedAt
-
-	fmt.Printf("TRACE: Forking pipeline %s at %s\n", forkedPipeline.id, forkedAt)
-
-	var err error
-	var wg sync.WaitGroup
-
-	// Set the number of goroutines to the number of stages
-	wg.Add(len(forkedPipeline.Stages))
-
-	currentIn := make(chan metadata.InputMetadata[T])
-
-outer:
-	for index, stage := range forkedPipeline.Stages {
-		currentOut := make(chan metadata.OutputMetadata[T])
-
-		isFinal := index == len(forkedPipeline.Stages)-1
-
-		select {
-		case <-ctx.Done():
-			fmt.Printf("ERR: Forked pipeline %s cancelled at %s - reason: %s\n", forkedPipeline.id, time.Now().UTC(), ctx.Err().Error())
-			err = ctx.Err()
-			break outer
-
-		default:
-			if isFinal {
-				// Final stage
-				// Pipe the final output to the provided output channel of the pipeline
-				err = processStageTransform(ctx, stage, currentIn, forkedPipeline.OutputChannel, &wg)
-				if err != nil {
-					fmt.Printf("ERR: %s\n", err.Error())
-					break
-				}
-			} else {
-				// Intermediate stage
-				// Pipe the output of the current stage to the input of the next stage
-				err = processStageTransform(ctx, stage, currentIn, currentOut, &wg)
-				if err != nil {
-					fmt.Printf("ERR: %s\n", err.Error())
-					break
-				}
-			}
-
-			// Current output channel becomes the next input channel
-			currentIn = convertCurrentOutToNextIn(currentOut)
-		}
-	}
-
-	// Wait for all goroutines to finish
-	wg.Wait()
-
-	forkedPipeline.CompletedAt = time.Now().UTC()
-	duration := forkedPipeline.CompletedAt.Sub(forkedAt).Milliseconds()
-	totalDuration := forkedPipeline.CompletedAt.Sub(forkedPipeline.StartedAt).Milliseconds()
-
-	fmt.Printf("TRACE: Completed forked pipeline %s in %v ms\n", forkedPipeline.id, duration)
-	fmt.Printf("TRACE: Completed pipeline %s in %v ms\n", forkedPipeline.id, totalDuration)
-
-	// Format outputMetadata
-	outputMetadata := metadata.OutputMetadata[T]{
-		InputID:    forkedPipeline.ForkedInput.Id,
-		Value:      value,
-		InputTime:  forkedPipeline.StartedAt,
-		OutputTime: forkedPipeline.CompletedAt,
-		ForkedAt:   &forkedAt,
-		Duration:   duration,
-		Err:        err,
-	}
-
-	forkedPipeline.Done <- struct{}{}
-
-	forkedPipeline.OutputChannel <- outputMetadata
-}
-
-// GetForkedInput returns the input metadata of the forked pipeline
-func (forkedPipeline *Pipeline[T]) GetForkedInput() metadata.InputMetadata[T] {
-	return *forkedPipeline.ForkedInput
-}
-
-// GetStages returns the stages of the forked pipeline
-func (forkedPipeline *Pipeline[T]) GetStages() []fgl_stage.Stage[T] {
-	return forkedPipeline.Stages
-}
-
-// IsDone returns true if the forked pipeline is done
-func (forkedPipeline *Pipeline[T]) IsDone() bool {
-	select {
-	case <-forkedPipeline.Done:
-		return true
-
-	default:
-		return false
-	}
-}
-
-// SetCompletedAt sets the completed at time of the forked pipeline
-func (forkedPipeline *Pipeline[T]) SetCompletedAt(timestamp time.Time) {
-	forkedPipeline.CompletedAt = timestamp
-}
-
-// MarkDone marks the forked pipeline as done
-func (forkedPipeline *Pipeline[T]) MarkDone() {
-	close(forkedPipeline.Done)
 }
