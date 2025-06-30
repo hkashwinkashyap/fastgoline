@@ -50,11 +50,11 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 	}
 }
 
-// RunPipeline runs the pipeline to process data.
-// It returns an error if any stage fails.
-func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
+// worker goroutine
+// It processes the pipeline stages concurrently
+func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T]) {
 	// Loop through each input coming from the input channel and process it through the pipeline
-	for inputValue := range pipeline.InputChannel {
+	for inputValue := range inputQueue {
 		go func(inputValue fgl_metadata.InputMetadata[T]) {
 			now := time.Now().UTC()
 			inputValue.InitialInput = &fgl_metadata.InitialInput[T]{
@@ -131,6 +131,33 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 			}
 		}(inputValue)
 	}
+}
+
+// RunPipeline runs the pipeline to process data.
+// It returns an error if any stage fails.
+func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
+	maxWorkers := pipeline.Config.MaxWorkers
+	// maxMemoryMB := pipeline.Config.MaxMemoryMB
+
+	inputQueue := make(chan fgl_metadata.InputMetadata[T])
+
+	// Spawn fixed number of goroutines
+	for i := 0; i < maxWorkers; i++ {
+		go pipeline.worker(ctx, inputQueue)
+	}
+
+	// Send input values to the input channel
+	go func() {
+		for input := range pipeline.InputChannel {
+			select {
+			case inputQueue <- input:
+			case <-ctx.Done():
+				return
+			}
+		}
+
+		close(inputQueue)
+	}()
 }
 
 // convertCurrentOutToNextIn converts output metadata to input metadata

@@ -3,6 +3,8 @@ package main
 import (
 	"context"
 	"fmt"
+	"os"
+	"runtime"
 	"sync"
 	"time"
 
@@ -10,9 +12,47 @@ import (
 	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_pipeline "github.com/hkashwinkashyap/fastgoline/fgl/pipeline"
 	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
+	fgl_util "github.com/hkashwinkashyap/fastgoline/util"
 )
 
+// logMemStats logs memory stats to the log file
+func logMemStats(f *os.File) {
+	var m runtime.MemStats
+	runtime.ReadMemStats(&m)
+
+	stats := fmt.Sprintf(
+		"Memory Stats: Alloc = %v MiB, TotalAlloc = %v MiB, Sys = %v MiB, NumGC = %v\n",
+		fgl_util.BytesToMB(m.Alloc), fgl_util.BytesToMB(m.TotalAlloc), fgl_util.BytesToMB(m.Sys), m.NumGC,
+	)
+	_, err := f.WriteString(stats)
+	if err != nil {
+		fmt.Println("Error writing memory stats:", err)
+	}
+}
+
 func main() {
+	// Create log file
+	f, err := os.Create(fmt.Sprintf("fastgoline_test_%s.log", time.Now().Format("2006-01-02 15:04:05")))
+	if err != nil {
+		fmt.Println("Error creating log file:", err)
+		return
+	}
+	defer func() {
+		err := f.Close()
+		if err != nil {
+			fmt.Println("Error closing log file:", err)
+		}
+	}()
+
+	// Start periodic memory stats logging every 5 milliseconds in background
+	go func() {
+		ticker := time.NewTicker(5 * time.Millisecond)
+		defer ticker.Stop()
+		for range ticker.C {
+			logMemStats(f)
+		}
+	}()
+
 	// Channels for pipeline 1
 	in := make(chan fgl_metadata.InputMetadata[float64])
 	out := make(chan fgl_metadata.OutputMetadata[float64])
@@ -20,7 +60,16 @@ func main() {
 	// Initialise config
 	config := fgl_config.InitialiseConfig()
 	// Change log level as required
-	// config.LogLevel = fgl_config.LogLevelError
+	config.LogLevel = fgl_config.LogLevelError
+	// config.MaxWorkers = 64
+
+	// Write config to log
+	line1 := fmt.Sprintf("FastGoLine Test Log with `max_workers` set to %d with CPUs: %d\n", config.MaxWorkers, runtime.NumCPU())
+	_, err = f.WriteString(line1)
+	if err != nil {
+		fmt.Println("Error writing to log file:", err)
+		return
+	}
 
 	pipeline1 := fgl_pipeline.NewPipeline[float64](in, out, config)
 
@@ -84,7 +133,12 @@ func main() {
 	job.AddPipeline(pipeline2)
 
 	startTime := time.Now().UTC()
-	fmt.Printf("Starting pipelines at %s\n", startTime)
+	line2 := fmt.Sprintf("Starting pipelines at %s\n", startTime)
+	_, err = f.WriteString(line2)
+	if err != nil {
+		fmt.Println("Error writing to log file:", err)
+		return
+	}
 
 	// Launch all pipelines
 	job.RunPipelinesInParallel(context.Background())
@@ -98,7 +152,7 @@ func main() {
 		defer close(in)
 
 		// Send input values to pipeline1
-		for i := 0; i < 100000; i++ {
+		for i := 0; i < 1000; i++ {
 			in <- fgl_metadata.NewInputMetadata(intialValue * 10.0)
 			// Add delay if required
 			// time.Sleep(time.Second * 1)
@@ -111,7 +165,7 @@ func main() {
 		defer close(in2)
 
 		// Send input values to pipeline2
-		for i := 0; i < 100; i++ {
+		for i := 0; i < 1000; i++ {
 			in2 <- fgl_metadata.NewInputMetadata(intialValue / 10.0)
 			// Add delay if required
 			// time.Sleep(time.Second * 1)
@@ -121,31 +175,54 @@ func main() {
 
 	go func() {
 		counter := 0
-		for result := range out {
-			fmt.Printf("Final result (pipeline1): %+v\n", result)
+		for range out {
 			counter++
 
-			if counter == 100000 {
+			if counter == 1000 {
 				break
 			}
 		}
 
+		line1 := fmt.Sprintf("Pipeline1 completed: %d items\n", counter)
+		line2 := fmt.Sprintf("Pipeline1 completed in %+vms\n", time.Since(startTime).Milliseconds())
+
+		_, err = f.WriteString(line1 + line2)
+		if err != nil {
+			fmt.Println("Error writing to log file:", err)
+			return
+		}
 		wg.Done()
 	}()
 
 	go func() {
 		counter := 0
-		for result := range out2 {
-			fmt.Printf("Final result (pipeline2): %+v\n", result)
+		for range out2 {
 			counter++
 
-			if counter == 100 {
+			if counter == 1000 {
 				break
 			}
 		}
 
+		line1 := fmt.Sprintf("Pipeline2 completed: %d items\n", counter)
+		line2 := fmt.Sprintf("Pipeline2 completed in %+vms\n", time.Since(startTime).Milliseconds())
+
+		_, err = f.WriteString(line1 + line2)
+		if err != nil {
+			fmt.Println("Error writing to log file:", err)
+			return
+		}
 		wg.Done()
 	}()
 
 	wg.Wait()
+	endTime := time.Now().UTC()
+	line3 := fmt.Sprintf("All pipelines completed at %s\n", endTime)
+	line4 := fmt.Sprintf("Total time: %+v ms\n", endTime.Sub(startTime).Milliseconds())
+
+	_, err = f.WriteString(line3 + line4)
+	if err != nil {
+		fmt.Println("Error writing to log file:", err)
+		return
+	}
 }

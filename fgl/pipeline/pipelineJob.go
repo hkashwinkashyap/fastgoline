@@ -43,7 +43,7 @@ func (pipelineJob *PipelineJob[T]) RunPipelinesInParallel(ctx context.Context) {
 		var wg sync.WaitGroup
 		wg.Add(len(pipelineJob.Pipelines))
 
-		if pipelineJob.Config.LogLevel == "DEBUG" {
+		if pipelineJob.Config.LogLevel == fgl_config.LogLevelDebug {
 			fmt.Println("TRACE: Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
 		}
 
