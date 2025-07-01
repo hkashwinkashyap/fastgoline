@@ -44,9 +44,9 @@ func main() {
 		}
 	}()
 
-	// Start periodic memory stats logging every 5 milliseconds in background
+	// Start periodic memory stats logging every 100 milliseconds in background
 	go func() {
-		ticker := time.NewTicker(5 * time.Millisecond)
+		ticker := time.NewTicker(100 * time.Millisecond)
 		defer ticker.Stop()
 		for range ticker.C {
 			logMemStats(f)
@@ -80,39 +80,35 @@ func main() {
 	pipeline2 := fgl_pipeline.NewPipeline[float64](in2, out2, config)
 
 	// Define reusable stage using StageTransformFunction
-	// This is used when you want full control over input and output channels,
+	// This is used when you want full control over input and output,
 	// such as for aggregations (sum, average, filtering, etc.)
-	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in chan fgl_metadata.InputMetadata[float64], out chan fgl_metadata.OutputMetadata[float64]) error {
+	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in fgl_metadata.InputMetadata[float64]) fgl_metadata.OutputMetadata[float64] {
 		var total float64
 
-		for value := range in {
-			total += value.Value
+		total += in.Value
 
-			out <- fgl_metadata.OutputMetadata[float64]{
-				InitialInput: fgl_metadata.InitialInput[float64]{
-					Id:        value.InitialInput.Id,
-					Value:     value.InitialInput.Value,
-					InputTime: value.InitialInput.InputTime,
-				},
-				OutputValue: total,
-				OutputTime:  time.Now().UTC(),
-				Duration:    time.Since(value.InputTime).Abs().Nanoseconds(),
-				Err:         nil,
-			}
+		return fgl_metadata.OutputMetadata[float64]{
+			InitialInput: fgl_metadata.InitialInput[float64]{
+				Id:        in.InitialInput.Id,
+				Value:     in.InitialInput.Value,
+				InputTime: in.InitialInput.InputTime,
+			},
+			OutputValue: total,
+			OutputTime:  time.Now().UTC(),
+			Duration:    time.Since(in.InputTime).Abs().Nanoseconds(),
+			Err:         nil,
 		}
-
-		return nil
 	})
 
 	// For simpler transformations (like activation functions or single-value transforms),
 	// you can use NewStageFunction which abstracts channel handling.
 	// These are suitable for stateless functions like scaling, normalization, etc.
-	multiplyBy2 := fgl_stage.NewStageFunction[float64](func(value float64) float64 {
-		return value * 2
+	multiplyBy2 := fgl_stage.NewStageFunction[float64](func(value float64) (float64, error) {
+		return value * 2, nil
 	})
 
-	percentage := fgl_stage.NewStageFunction[float64](func(value float64) float64 {
-		return value / 100
+	percentage := fgl_stage.NewStageFunction[float64](func(value float64) (float64, error) {
+		return value / 100, nil
 	})
 
 	// Add stages to each pipeline

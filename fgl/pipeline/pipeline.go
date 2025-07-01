@@ -3,7 +3,6 @@ package fgl_pipeline
 import (
 	"context"
 	"fmt"
-	"sync"
 	"time"
 
 	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
@@ -14,7 +13,7 @@ import (
 )
 
 // Pipeline holds a sequence of stages to process data.
-// Each stage runs concurrently, passing data along channels.
+// Each stage runs concurrently, passing data along the pipeline.
 type Pipeline[T any] struct {
 	id            string
 	Stages        []fgl_stage.Stage[T]
@@ -42,7 +41,8 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 
 	// Return a new pipeline instance
 	return &Pipeline[T]{id: id,
-		Stages: nil, InputChannel: in,
+		Stages:        nil,
+		InputChannel:  in,
 		OutputChannel: out,
 		Done:          make(chan struct{}),
 		StartedAt:     time.Now().UTC(),
@@ -52,10 +52,21 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 
 // worker goroutine
 // It processes the pipeline stages concurrently
-func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T]) {
-	// Loop through each input coming from the input channel and process it through the pipeline
+func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
+	semaphore := make(chan struct{}, pipeline.Config.MaxWorkers)
+
+	// Loop through each input coming from the input and process it through the pipeline
 	for inputValue := range inputQueue {
-		go func(inputValue fgl_metadata.InputMetadata[T]) {
+		// Wait until a worker slot is available
+		semaphore <- struct{}{}
+
+		workerMetadata.IncrementActiveWorkers()
+
+		// if workerMetadata.GetActiveWorkers() >= pipeline.Config.MaxWorkers {
+		// 	fmt.Printf("WARN: Pipeline %s is at max workers. Waiting for a worker to be freed up...\n", pipeline.id)
+		// }
+
+		go func(fgl_metadata.InputMetadata[T]) {
 			now := time.Now().UTC()
 			inputValue.InitialInput = &fgl_metadata.InitialInput[T]{
 				Id:        fgl_util.GenerateUUID(),
@@ -63,72 +74,54 @@ func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_met
 				InputTime: now,
 			}
 
-			if pipeline.Config.LogLevel == "DEBUG" {
+			if pipeline.Config.LogLevel == fgl_config.LogLevelDebug {
 				fmt.Printf("TRACE: Starting pipeline %s with input - {Id: %s, Value: %+v, InputTime: %s}\n", pipeline.id, inputValue.InitialInput.Id, inputValue.InitialInput.Value, inputValue.InitialInput.InputTime)
 			}
 
-			var err error
-			var wg sync.WaitGroup
+			// Current input
+			currentIn := inputValue
 
-			// Set the number of goroutines to the number of stages
-			wg.Add(len(pipeline.Stages))
+			// Current output is the intermediate output used to chain the stages thorughout the pipeline
+			currentOut := fgl_metadata.OutputMetadata[T]{}
 
 			// Pipe in the inputValue to the first stage
-			currentIn := make(chan fgl_metadata.InputMetadata[T], 1)
-			currentIn <- inputValue
-
 			for index, stage := range pipeline.Stages {
-				// Current output channel is the intermediate output channel used to chain the stages thorughout the pipeline
-				currentOut := make(chan fgl_metadata.OutputMetadata[T], 1)
+				// Make a note of timestamp when the stage is started to calculate the duration or time taken to process that stage
+				startedStageAt := time.Now().UTC()
 
-				isFinal := index == len(pipeline.Stages)-1
-
-				if isFinal {
-					// Final stage
-					// Pipe the final output to the provided output channel of the pipeline
-					err = processStageTransform(ctx, stage, currentIn, pipeline.OutputChannel, &wg)
-					if err != nil {
-						ctx.Done()
-						fmt.Printf("ERR: Failed to process final stage of pipeline %s: %s\n", pipeline.id, err.Error())
-						panic(err)
-					}
-				} else {
-					// Make a note of timestamp when the stage is started to calculate the duration or time taken to process that stage
-					startedStageAt := time.Now().UTC()
-
-					// Intermediate stage
-					// Pipe the current output to the next input channel
-					err = processStageTransform(ctx, stage, currentIn, currentOut, &wg)
-					if err != nil {
-						ctx.Done()
-						fmt.Printf("ERR: Failed to process intermediate stage of pipeline %s: %s\n", pipeline.id, err.Error())
-						panic(err)
-					}
-
-					if pipeline.Config.LogLevel == "DEBUG" {
-						fmt.Printf("TRACE: Processed stage %s in %v nanoseconds\n", stage.GetID(), time.Since(startedStageAt).Abs().Nanoseconds())
-					}
-
-					// Current output channel becomes the next input channel
-					currentIn = convertCurrentOutToNextIn(currentOut)
+				currentOut = stage.TransformFunction(ctx, currentIn)
+				if currentOut.Err != nil {
+					ctx.Done()
+					fmt.Printf("ERR: Failed to process stage number %d {%+v} of pipeline %s: %s\n", index, stage, pipeline.id, currentOut.Err.Error())
+					panic(currentOut.Err)
 				}
-			}
 
-			// Wait for all stages to finish
-			wg.Wait()
+				if pipeline.Config.LogLevel == fgl_config.LogLevelDebug {
+					fmt.Printf("TRACE: Processed stage %s in %v nanoseconds\n", stage.GetID(), time.Since(startedStageAt).Abs().Nanoseconds())
+				}
+
+				// Current output becomes the next input
+				currentIn = convertCurrentOutToNextIn(currentOut)
+			}
 
 			// Mark the pipeline as completed
 			pipeline.CompletedAt = time.Now().UTC()
-			pipeline.Done <- struct{}{}
+			pipeline.OutputChannel <- currentOut
 
-			if pipeline.Config.LogLevel == "DEBUG" {
-				fmt.Printf("TRACE: Finished Pipeline %s in %v ms with input value %+v\n", pipeline.GetID(), time.Now().UTC().Sub(now).Milliseconds(), inputValue)
+			// Release the worker
+			<-semaphore
+			workerMetadata.DecrementActiveWorkers()
+
+			if pipeline.Config.LogLevel == fgl_config.LogLevelInfo {
+				fmt.Printf("TRACE: Finished Pipeline %s in %+v ms with output value %+v\n", pipeline.GetID(), time.Now().UTC().Sub(now).Milliseconds(), currentOut)
 			}
 
 			if ctx.Err() != nil {
 				fmt.Printf("ERROR: Pipeline %s failed with error %v\n", pipeline.GetID(), ctx.Err())
 				panic(ctx.Err())
 			}
+
+			pipeline.Done <- struct{}{}
 		}(inputValue)
 	}
 }
@@ -136,17 +129,16 @@ func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_met
 // RunPipeline runs the pipeline to process data.
 // It returns an error if any stage fails.
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
-	maxWorkers := pipeline.Config.MaxWorkers
+	workerMetadata := fgl_metadata.NewWorkerMetadata[T]()
+	// maxWorkers := pipeline.Config.MaxWorkers
 	// maxMemoryMB := pipeline.Config.MaxMemoryMB
 
 	inputQueue := make(chan fgl_metadata.InputMetadata[T])
 
 	// Spawn fixed number of goroutines
-	for i := 0; i < maxWorkers; i++ {
-		go pipeline.worker(ctx, inputQueue)
-	}
+	go pipeline.worker(ctx, inputQueue, workerMetadata)
 
-	// Send input values to the input channel
+	// Send input values to the input
 	go func() {
 		for input := range pipeline.InputChannel {
 			select {
@@ -162,43 +154,15 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 
 // convertCurrentOutToNextIn converts output metadata to input metadata
 // This is used to pipe the output of a stage to the input of the next intermediate stage
-func convertCurrentOutToNextIn[T any](currentOut chan fgl_metadata.OutputMetadata[T]) chan fgl_metadata.InputMetadata[T] {
-	nextIn := make(chan fgl_metadata.InputMetadata[T], 1)
+func convertCurrentOutToNextIn[T any](currentOut fgl_metadata.OutputMetadata[T]) fgl_metadata.InputMetadata[T] {
+	nextIn := fgl_metadata.InputMetadata[T]{
+		InitialInput: &currentOut.InitialInput,
+		Value:        currentOut.OutputValue,
+		InputTime:    currentOut.InitialInput.InputTime,
+	}
 
-	go func() {
-		defer close(nextIn)
-
-		for outMeta := range currentOut {
-			nextIn <- fgl_metadata.InputMetadata[T]{
-				InitialInput: &outMeta.InitialInput,
-				Value:        outMeta.OutputValue,
-				InputTime:    outMeta.InitialInput.InputTime,
-			}
-		}
-	}()
-
-	// Return the next input channel
+	// Return the next input
 	return nextIn
-}
-
-// processStageTransform goroutine
-// It reads from the input channel, processes data, and sends results to the output channel.
-// It returns an error if the stage fails.
-func processStageTransform[T any](ctx context.Context, stage fgl_stage.Stage[T], in chan fgl_metadata.InputMetadata[T], out chan fgl_metadata.OutputMetadata[T], wg *sync.WaitGroup) error {
-	go func() {
-		defer func() {
-			wg.Done()
-			close(out)
-		}()
-
-		err := stage.TransformFunction(ctx, in, out)
-		if err != nil {
-			fmt.Printf("ERR: Failed to process stage %s: %s\n", stage.GetID(), err.Error())
-			return
-		}
-	}()
-
-	return nil
 }
 
 // AddStage appends a processing stage to the pipeline.
@@ -214,7 +178,7 @@ func (pipeline *Pipeline[T]) AddStages(stages []fgl_stage.Stage[T]) {
 // RemoveStage removes a processing stage from the pipeline.
 func (pipeline *Pipeline[T]) RemoveStage(stage fgl_stage.Stage[T]) {
 	for index, stageItem := range pipeline.Stages {
-		if stageItem.Id == stage.Id {
+		if stageItem.GetID() == stage.GetID() {
 			pipeline.Stages = append(pipeline.Stages[:index], pipeline.Stages[index+1:]...)
 			break
 		}
