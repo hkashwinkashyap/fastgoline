@@ -3,12 +3,12 @@ package fgl_pipeline
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
 	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
-
 	fgl_util "github.com/hkashwinkashyap/fastgoline/util"
 )
 
@@ -50,13 +50,29 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 	}
 }
 
-// worker goroutine
+// initialiseWorkerPool initialises the worker pool
 // It processes the pipeline stages concurrently
-func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
+func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
 	semaphore := make(chan struct{}, pipeline.Config.MaxWorkers)
+	counter := 0
 
 	// Loop through each input coming from the input and process it through the pipeline
 	for inputValue := range inputQueue {
+		// Check the heap allocation
+		m := runtime.MemStats{}
+		runtime.ReadMemStats(&m)
+		for fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
+			fmt.Printf("WARN: Pipeline %s has exceeded the max memory limit. Current heap allocation: %v MiB. Waiting until memory is freed up...\n", pipeline.GetID(), fgl_util.BytesToMB(m.HeapAlloc))
+			runtime.GC()
+
+			// Update the heap allocation
+			runtime.ReadMemStats(&m)
+
+			counter++
+		}
+
+		counter = 0
+
 		// Wait until a worker slot is available
 		semaphore <- struct{}{}
 
@@ -130,26 +146,50 @@ func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_met
 // It returns an error if any stage fails.
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 	workerMetadata := fgl_metadata.NewWorkerMetadata[T]()
-	// maxWorkers := pipeline.Config.MaxWorkers
-	// maxMemoryMB := pipeline.Config.MaxMemoryMB
 
-	inputQueue := make(chan fgl_metadata.InputMetadata[T])
+	// inputQueue := make(chan fgl_metadata.InputMetadata[T])
 
 	// Spawn fixed number of goroutines
-	go pipeline.worker(ctx, inputQueue, workerMetadata)
+	go pipeline.initialiseWorkerPool(ctx, pipeline.InputChannel, workerMetadata)
 
-	// Send input values to the input
-	go func() {
-		for input := range pipeline.InputChannel {
-			select {
-			case inputQueue <- input:
-			case <-ctx.Done():
-				return
-			}
-		}
+	// // Send input values to the input
+	// go func() {
+	// 	counter := 0
 
-		close(inputQueue)
-	}()
+	// 	for input := range pipeline.InputChannel {
+	// 		// Check the heap allocation
+	// 		m := runtime.MemStats{}
+	// 		runtime.ReadMemStats(&m)
+	// 		for {
+	// 			if counter < pipeline.Config.MaxWorkers && fgl_util.BytesToMB(m.HeapAlloc) < pipeline.Config.MaxMemoryMB {
+	// 				break
+	// 			}
+
+	// 			if fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
+	// 				fmt.Printf("WARN: Pipeline %s has exceeded the max memory limit. Current heap allocation: %v MiB. Waiting until memory is freed up...\n", pipeline.GetID(), fgl_util.BytesToMB(m.Sys))
+	// 				runtime.GC()
+
+	// 				// Allow the GC to settle
+	// 				time.Sleep(100 * time.Millisecond)
+
+	// 				// Update the heap allocation
+	// 				runtime.ReadMemStats(&m)
+	// 			}
+
+	// 			counter++
+	// 		}
+
+	// 		counter = 0
+
+	// 		select {
+	// 		case inputQueue <- input:
+	// 		case <-ctx.Done():
+	// 			return
+	// 		}
+	// 	}
+
+	// 	close(inputQueue)
+	// }()
 }
 
 // convertCurrentOutToNextIn converts output metadata to input metadata

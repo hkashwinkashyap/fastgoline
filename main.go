@@ -16,18 +16,20 @@ import (
 )
 
 // logMemStats logs memory stats to the log file
-func logMemStats(f *os.File) {
+func logMemStats(f *os.File, counter int, pipelineNumber int, duration int64) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
 	stats := fmt.Sprintf(
-		"Memory Stats: Alloc = %v MiB, TotalAlloc = %v MiB, Sys = %v MiB, NumGC = %v\n",
-		fgl_util.BytesToMB(m.Alloc), fgl_util.BytesToMB(m.TotalAlloc), fgl_util.BytesToMB(m.Sys), m.NumGC,
+		"Memory Stats: Alloc = %v MiB, TotalAlloc = %v MiB, Sys = %v MiB, NumGC = %v, Counter = %v, Pipeline = %v took %v\n",
+		fgl_util.BytesToMB(m.Alloc), fgl_util.BytesToMB(m.TotalAlloc), fgl_util.BytesToMB(m.Sys), m.NumGC, counter, pipelineNumber, duration,
 	)
 	_, err := f.WriteString(stats)
 	if err != nil {
 		fmt.Println("Error writing memory stats:", err)
 	}
+
+	fmt.Println(stats)
 }
 
 func main() {
@@ -41,15 +43,6 @@ func main() {
 		err := f.Close()
 		if err != nil {
 			fmt.Println("Error closing log file:", err)
-		}
-	}()
-
-	// Start periodic memory stats logging every 100 milliseconds in background
-	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			logMemStats(f)
 		}
 	}()
 
@@ -144,15 +137,15 @@ func main() {
 	wg.Add(2)
 
 	go func() {
-		intialValue := 0.0
+		intialValue := 4.0
 		defer close(in)
 
 		// Send input values to pipeline1
-		for i := 0; i < 1000; i++ {
-			in <- fgl_metadata.NewInputMetadata(intialValue * 10.0)
+		for i := 0; i < 1000000; i++ {
+			in <- fgl_metadata.NewInputMetadata(intialValue)
 			// Add delay if required
-			// time.Sleep(time.Second * 1)
-			intialValue += 10.0
+			// time.Sleep(time.Microsecond * 500)
+			// intialValue += 0.05
 		}
 	}()
 
@@ -161,11 +154,11 @@ func main() {
 		defer close(in2)
 
 		// Send input values to pipeline2
-		for i := 0; i < 1000; i++ {
-			in2 <- fgl_metadata.NewInputMetadata(intialValue / 10.0)
+		for i := 0; i < 1000000; i++ {
+			in2 <- fgl_metadata.NewInputMetadata(intialValue)
 			// Add delay if required
-			// time.Sleep(time.Second * 1)
-			intialValue -= 10.0
+			// time.Sleep(time.Microsecond * 500)
+			// intialValue -= 0.05
 		}
 	}()
 
@@ -174,7 +167,11 @@ func main() {
 		for range out {
 			counter++
 
-			if counter == 1000 {
+			if counter%10000 == 0 {
+				logMemStats(f, counter, 1, time.Since(startTime).Milliseconds())
+			}
+
+			if counter == 1000000 {
 				break
 			}
 		}
@@ -195,7 +192,11 @@ func main() {
 		for range out2 {
 			counter++
 
-			if counter == 1000 {
+			if counter%10000 == 0 {
+				logMemStats(f, counter, 2, time.Since(startTime).Milliseconds())
+			}
+
+			if counter == 1000000 {
 				break
 			}
 		}

@@ -29,16 +29,18 @@ func getEnv(key string, defaultValue string) string {
 }
 
 // InitialiseConfig returns the configuration for the pipeline
+// Default MaxWorkers = number of CPUs * 2
+// Default MaxMemoryMB = 1024
 // TODO - more to come
 func InitialiseConfig() *Config {
-	maxWorkers, err := strconv.Atoi(getEnv("FGL_MAX_WORKERS", strconv.Itoa(runtime.NumCPU()*4)))
+	maxWorkers, err := strconv.Atoi(getEnv("FGL_MAX_WORKERS", strconv.Itoa(runtime.NumCPU()*2)))
 	if err != nil {
-		maxWorkers = runtime.NumCPU() * 4
+		maxWorkers = runtime.NumCPU() * 2
 	}
 
 	maxMemoryMB, err := strconv.ParseUint(getEnv("FGL_MAX_MEMORY_MB", "1024"), 10, 64)
 	if err != nil {
-		maxMemoryMB = 0
+		maxMemoryMB = 1024
 	}
 
 	return &Config{
