@@ -13,3 +13,9 @@ func GenerateUUID() string {
 
 	return id
 }
+
+// BytesToMB converts bytes to megabytes
+// This is used to convert the memory usage to megabytes
+func BytesToMB(b uint64) uint64 {
+	return b / 1024 / 1024
+}

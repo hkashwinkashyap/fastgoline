@@ -1,6 +1,7 @@
 package metadata
 
 import (
+	"sync"
 	"time"
 )
 
@@ -40,4 +41,39 @@ type OutputMetadata[T any] struct {
 	OutputTime   time.Time
 	Duration     int64
 	Err          error
+}
+
+// WorkerMetadata is struct of worker metadata
+// It contains the number of active workers
+type WorkerMetadata[T any] struct {
+	mu            sync.RWMutex
+	activeWorkers int
+}
+
+// NewWorkerMetadata creates a new WorkerMetadata instance
+func NewWorkerMetadata[T any]() *WorkerMetadata[T] {
+	return &WorkerMetadata[T]{
+		activeWorkers: 0,
+	}
+}
+
+// GetActiveWorkers returns the number of active workers
+func (workerMetadata *WorkerMetadata[T]) GetActiveWorkers() int {
+	workerMetadata.mu.RLock()
+	defer workerMetadata.mu.RUnlock()
+	return workerMetadata.activeWorkers
+}
+
+// IncrementActiveWorkers sets the number of active workers
+func (workerMetadata *WorkerMetadata[T]) IncrementActiveWorkers() {
+	workerMetadata.mu.Lock()
+	defer workerMetadata.mu.Unlock()
+	workerMetadata.activeWorkers++
+}
+
+// DecrementActiveWorkers sets the number of active workers
+func (workerMetadata *WorkerMetadata[T]) DecrementActiveWorkers() {
+	workerMetadata.mu.Lock()
+	defer workerMetadata.mu.Unlock()
+	workerMetadata.activeWorkers--
 }

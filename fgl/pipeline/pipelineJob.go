@@ -39,28 +39,26 @@ func (pipelineJob *PipelineJob[T]) RunPipelinesInParallel(ctx context.Context) {
 	}()
 
 	// Run all pipelines in parallel
-	go func() {
-		var wg sync.WaitGroup
-		wg.Add(len(pipelineJob.Pipelines))
+	var wg sync.WaitGroup
+	wg.Add(len(pipelineJob.Pipelines))
 
-		if pipelineJob.Config.LogLevel == "DEBUG" {
-			fmt.Println("TRACE: Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
-		}
+	if pipelineJob.Config.LogLevel == fgl_config.LogLevelDebug {
+		fmt.Println("TRACE: Running", len(pipelineJob.Pipelines), "pipelines in parallel...")
+	}
 
-		// Loop through all pipelines
-		for _, pipeline := range pipelineJob.Pipelines {
-			// Kick off a goroutine for each pipeline
-			go func(pipeline *Pipeline[T]) {
-				defer wg.Done()
+	// Loop through all pipelines
+	for _, pipeline := range pipelineJob.Pipelines {
+		// Kick off a goroutine for each pipeline
+		go func(pipeline *Pipeline[T]) {
+			defer wg.Done()
 
-				// Run the pipeline
-				pipeline.RunPipeline(ctx)
-			}(&pipeline)
-		}
+			// Run the pipeline
+			pipeline.RunPipeline(ctx)
+		}(&pipeline)
+	}
 
-		wg.Wait()
+	wg.Wait()
 
-		// Return success
-		ctx.Done()
-	}()
+	// Return success
+	ctx.Done()
 }
