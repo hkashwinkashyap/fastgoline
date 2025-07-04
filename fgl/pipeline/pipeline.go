@@ -3,12 +3,12 @@ package fgl_pipeline
 import (
 	"context"
 	"fmt"
+	"runtime"
 	"time"
 
 	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
 	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
 	fgl_stage "github.com/hkashwinkashyap/fastgoline/fgl/stage"
-
 	fgl_util "github.com/hkashwinkashyap/fastgoline/util"
 )
 
@@ -19,7 +19,6 @@ type Pipeline[T any] struct {
 	Stages        []fgl_stage.Stage[T]
 	InputChannel  chan fgl_metadata.InputMetadata[T]
 	OutputChannel chan fgl_metadata.OutputMetadata[T]
-	Done          chan struct{}
 	StartedAt     time.Time
 	CompletedAt   time.Time
 	Config        fgl_config.Config
@@ -44,27 +43,23 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 		Stages:        nil,
 		InputChannel:  in,
 		OutputChannel: out,
-		Done:          make(chan struct{}),
 		StartedAt:     time.Now().UTC(),
 		Config:        *config,
 	}
 }
 
-// worker goroutine
+// initialiseWorkerPool initialises the worker pool
 // It processes the pipeline stages concurrently
-func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
+func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
 	semaphore := make(chan struct{}, pipeline.Config.MaxWorkers)
 
 	// Loop through each input coming from the input and process it through the pipeline
 	for inputValue := range inputQueue {
+
 		// Wait until a worker slot is available
 		semaphore <- struct{}{}
 
 		workerMetadata.IncrementActiveWorkers()
-
-		// if workerMetadata.GetActiveWorkers() >= pipeline.Config.MaxWorkers {
-		// 	fmt.Printf("WARN: Pipeline %s is at max workers. Waiting for a worker to be freed up...\n", pipeline.id)
-		// }
 
 		go func(fgl_metadata.InputMetadata[T]) {
 			now := time.Now().UTC()
@@ -120,35 +115,39 @@ func (pipeline *Pipeline[T]) worker(ctx context.Context, inputQueue chan fgl_met
 				fmt.Printf("ERROR: Pipeline %s failed with error %v\n", pipeline.GetID(), ctx.Err())
 				panic(ctx.Err())
 			}
-
-			pipeline.Done <- struct{}{}
 		}(inputValue)
 	}
+
+	// Return success
+	ctx.Done()
 }
 
 // RunPipeline runs the pipeline to process data.
 // It returns an error if any stage fails.
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 	workerMetadata := fgl_metadata.NewWorkerMetadata[T]()
-	// maxWorkers := pipeline.Config.MaxWorkers
-	// maxMemoryMB := pipeline.Config.MaxMemoryMB
 
-	inputQueue := make(chan fgl_metadata.InputMetadata[T])
+	// Initialise the worker pool
+	go pipeline.initialiseWorkerPool(ctx, pipeline.InputChannel, workerMetadata)
 
-	// Spawn fixed number of goroutines
-	go pipeline.worker(ctx, inputQueue, workerMetadata)
-
-	// Send input values to the input
+	// Kick off a goroutine to monitor memory usage and initiate GC
 	go func() {
-		for input := range pipeline.InputChannel {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
 			select {
-			case inputQueue <- input:
 			case <-ctx.Done():
 				return
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				if fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
+					fmt.Printf("WARN: Pipeline %s memory high: %d MB\n", pipeline.id, fgl_util.BytesToMB(m.HeapAlloc))
+					runtime.GC()
+				}
 			}
 		}
-
-		close(inputQueue)
 	}()
 }
 

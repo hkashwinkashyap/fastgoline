@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
 	"time"
+
+	_ "net/http/pprof"
 
 	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
 	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
@@ -15,210 +18,163 @@ import (
 	fgl_util "github.com/hkashwinkashyap/fastgoline/util"
 )
 
+const (
+	numPipelines      = 10
+	inputsPerPipeline = 2000000
+	logInterval       = 100000
+)
+
 // logMemStats logs memory stats to the log file
-func logMemStats(f *os.File) {
+func logMemStats(f *os.File, counter int, pipelineNumber int, duration int64) {
 	var m runtime.MemStats
 	runtime.ReadMemStats(&m)
 
 	stats := fmt.Sprintf(
-		"Memory Stats: Alloc = %v MiB, TotalAlloc = %v MiB, Sys = %v MiB, NumGC = %v\n",
-		fgl_util.BytesToMB(m.Alloc), fgl_util.BytesToMB(m.TotalAlloc), fgl_util.BytesToMB(m.Sys), m.NumGC,
+		"Memory Stats: Alloc = %v MiB, TotalAlloc = %v MiB, Sys = %v MiB, NumGC = %v, Goroutines = %d, Counter = %v, Pipeline = %v took %vms\n",
+		fgl_util.BytesToMB(m.Alloc), fgl_util.BytesToMB(m.TotalAlloc), fgl_util.BytesToMB(m.Sys),
+		m.NumGC, runtime.NumGoroutine(), counter, pipelineNumber, duration,
 	)
 	_, err := f.WriteString(stats)
 	if err != nil {
 		fmt.Println("Error writing memory stats:", err)
 	}
+	fmt.Println(stats)
 }
 
 func main() {
+	// Start pprof
+	go func() {
+		fmt.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
+	runtime.GOMAXPROCS(runtime.NumCPU())
+
 	// Create log file
 	f, err := os.Create(fmt.Sprintf("fastgoline_test_%s.log", time.Now().Format("2006-01-02 15:04:05")))
 	if err != nil {
-		fmt.Println("Error creating log file:", err)
-		return
+		panic(err)
 	}
+
 	defer func() {
-		err := f.Close()
+		err = f.Close()
 		if err != nil {
-			fmt.Println("Error closing log file:", err)
+			panic(err)
 		}
 	}()
-
-	// Start periodic memory stats logging every 100 milliseconds in background
-	go func() {
-		ticker := time.NewTicker(100 * time.Millisecond)
-		defer ticker.Stop()
-		for range ticker.C {
-			logMemStats(f)
-		}
-	}()
-
-	// Channels for pipeline 1
-	in := make(chan fgl_metadata.InputMetadata[float64])
-	out := make(chan fgl_metadata.OutputMetadata[float64])
 
 	// Initialise config
 	config := fgl_config.InitialiseConfig()
-	// Change log level as required
 	config.LogLevel = fgl_config.LogLevelError
-	// config.MaxWorkers = 64
 
-	// Write config to log
-	line1 := fmt.Sprintf("FastGoLine Test Log with `max_workers` set to %d with CPUs: %d\n", config.MaxWorkers, runtime.NumCPU())
-	_, err = f.WriteString(line1)
+	logLine := fmt.Sprintf("FastGoLine Test Log: max_workers=%d, CPUs=%d, pipelines=%d\n", config.MaxWorkers, runtime.NumCPU(), numPipelines)
+	_, err = f.WriteString(logLine)
 	if err != nil {
-		fmt.Println("Error writing to log file:", err)
-		return
+		panic(err)
 	}
 
-	pipeline1 := fgl_pipeline.NewPipeline[float64](in, out, config)
-
-	// Channels for pipeline 2
-	in2 := make(chan fgl_metadata.InputMetadata[float64])
-	out2 := make(chan fgl_metadata.OutputMetadata[float64])
-
-	pipeline2 := fgl_pipeline.NewPipeline[float64](in2, out2, config)
-
-	// Define reusable stage using StageTransformFunction
-	// This is used when you want full control over input and output,
-	// such as for aggregations (sum, average, filtering, etc.)
-	total := fgl_stage.StageTransformFunction[float64](func(ctx context.Context, in fgl_metadata.InputMetadata[float64]) fgl_metadata.OutputMetadata[float64] {
-		var total float64
-
-		total += in.Value
-
-		return fgl_metadata.OutputMetadata[float64]{
-			InitialInput: fgl_metadata.InitialInput[float64]{
-				Id:        in.InitialInput.Id,
-				Value:     in.InitialInput.Value,
-				InputTime: in.InitialInput.InputTime,
-			},
-			OutputValue: total,
-			OutputTime:  time.Now().UTC(),
-			Duration:    time.Since(in.InputTime).Abs().Nanoseconds(),
-			Err:         nil,
-		}
-	})
-
-	// For simpler transformations (like activation functions or single-value transforms),
-	// you can use NewStageFunction which abstracts channel handling.
-	// These are suitable for stateless functions like scaling, normalization, etc.
+	// Define stages
 	multiplyBy2 := fgl_stage.NewStageFunction[float64](func(value float64) (float64, error) {
 		return value * 2, nil
 	})
-
 	percentage := fgl_stage.NewStageFunction[float64](func(value float64) (float64, error) {
 		return value / 100, nil
 	})
 
-	// Add stages to each pipeline
-	pipeline1.AddStage(multiplyBy2)
-	pipeline1.AddStage(percentage)
-	pipeline1.AddStage(multiplyBy2)
-	pipeline1.AddStage(multiplyBy2)
-	pipeline1.AddStage(multiplyBy2)
-	pipeline1.AddStage(percentage)
+	// Pipeline inputs and outputs
+	inChans := make([]chan fgl_metadata.InputMetadata[float64], numPipelines)
+	outChans := make([]chan fgl_metadata.OutputMetadata[float64], numPipelines)
 
-	pipeline2.AddStage(multiplyBy2)
-	pipeline2.AddStage(fgl_stage.NewStage[float64](total))
-
-	// Run pipelines concurrently
 	job := fgl_pipeline.NewPipelineJob[float64](config)
 
-	job.AddPipeline(pipeline1)
-	job.AddPipeline(pipeline2)
+	// Setup pipelines
+	for i := 0; i < numPipelines; i++ {
+		inChans[i] = make(chan fgl_metadata.InputMetadata[float64], 1000)
+		outChans[i] = make(chan fgl_metadata.OutputMetadata[float64], 1000)
 
-	startTime := time.Now().UTC()
-	line2 := fmt.Sprintf("Starting pipelines at %s\n", startTime)
-	_, err = f.WriteString(line2)
-	if err != nil {
-		fmt.Println("Error writing to log file:", err)
-		return
+		p := fgl_pipeline.NewPipeline[float64](inChans[i], outChans[i], config)
+		p.AddStage(multiplyBy2)
+		p.AddStage(percentage)
+		p.AddStage(multiplyBy2)
+		p.AddStage(multiplyBy2)
+		p.AddStage(multiplyBy2)
+		p.AddStage(percentage)
+
+		job.AddPipeline(p)
 	}
 
-	// Launch all pipelines
+	startTime := time.Now().UTC()
+	startingLog := fmt.Sprintf("Starting stress test at %s\n", startTime.Format(time.RFC3339))
+	_, err = f.WriteString(startingLog)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Println(startingLog)
+
+	// Start pipeline processing
 	job.RunPipelinesInParallel(context.Background())
 
-	// Pass in the input to the channels
 	var wg sync.WaitGroup
-	wg.Add(2)
 
-	go func() {
-		intialValue := 0.0
-		defer close(in)
-
-		// Send input values to pipeline1
-		for i := 0; i < 1000; i++ {
-			in <- fgl_metadata.NewInputMetadata(intialValue * 10.0)
-			// Add delay if required
-			// time.Sleep(time.Second * 1)
-			intialValue += 10.0
-		}
-	}()
-
-	go func() {
-		intialValue := 10.0
-		defer close(in2)
-
-		// Send input values to pipeline2
-		for i := 0; i < 1000; i++ {
-			in2 <- fgl_metadata.NewInputMetadata(intialValue / 10.0)
-			// Add delay if required
-			// time.Sleep(time.Second * 1)
-			intialValue -= 10.0
-		}
-	}()
-
-	go func() {
-		counter := 0
-		for range out {
-			counter++
-
-			if counter == 1000 {
-				break
+	// Input goroutines
+	for i := 0; i < numPipelines; i++ {
+		wg.Add(1)
+		go func(i int) {
+			defer close(inChans[i]) // Close input after sending all items
+			value := float64(i * 100)
+			for j := 0; j < inputsPerPipeline; j++ {
+				inChans[i] <- fgl_metadata.NewInputMetadata(value)
+				value += 1.1
 			}
-		}
+			wg.Done()
+		}(i)
+	}
 
-		line1 := fmt.Sprintf("Pipeline1 completed: %d items\n", counter)
-		line2 := fmt.Sprintf("Pipeline1 completed in %+vms\n", time.Since(startTime).Milliseconds())
-
-		_, err = f.WriteString(line1 + line2)
-		if err != nil {
-			fmt.Println("Error writing to log file:", err)
-			return
-		}
-		wg.Done()
-	}()
-
+	// Wait for all inputs to be sent before handling output close
 	go func() {
-		counter := 0
-		for range out2 {
-			counter++
-
-			if counter == 1000 {
-				break
-			}
+		wg.Wait()
+		// Optional: add small delay to let processing complete
+		time.Sleep(2 * time.Second)
+		for _, out := range outChans {
+			close(out)
 		}
-
-		line1 := fmt.Sprintf("Pipeline2 completed: %d items\n", counter)
-		line2 := fmt.Sprintf("Pipeline2 completed in %+vms\n", time.Since(startTime).Milliseconds())
-
-		_, err = f.WriteString(line1 + line2)
-		if err != nil {
-			fmt.Println("Error writing to log file:", err)
-			return
-		}
-		wg.Done()
 	}()
 
-	wg.Wait()
+	// Output collectors
+	var outputWg sync.WaitGroup
+	for i := 0; i < numPipelines; i++ {
+		outputWg.Add(1)
+		go func(i int) {
+			defer outputWg.Done()
+			counter := 0
+			var lastOutput fgl_metadata.OutputMetadata[float64]
+			for output := range outChans[i] {
+				counter++
+				lastOutput = output
+				if counter%logInterval == 0 {
+					logMemStats(f, counter, i+1, time.Since(startTime).Milliseconds())
+				}
+			}
+			completedLog := fmt.Sprintf("Pipeline %d completed: %d items in %d ms. Last Output: %+v\n",
+				i+1, counter, time.Since(startTime).Milliseconds(), lastOutput)
+			_, err = f.WriteString(completedLog)
+			if err != nil {
+				panic(err)
+			}
+		}(i)
+	}
+
+	outputWg.Wait()
 	endTime := time.Now().UTC()
-	line3 := fmt.Sprintf("All pipelines completed at %s\n", endTime)
-	line4 := fmt.Sprintf("Total time: %+v ms\n", endTime.Sub(startTime).Milliseconds())
-
-	_, err = f.WriteString(line3 + line4)
+	allPipelinesCompleted := fmt.Sprintf("All pipelines completed at %s\n", endTime.Format(time.RFC3339))
+	_, err = f.WriteString(allPipelinesCompleted)
 	if err != nil {
-		fmt.Println("Error writing to log file:", err)
-		return
+		panic(err)
+	}
+
+	totalElapsedTime := fmt.Sprintf("Total elapsed time: %d ms\n", endTime.Sub(startTime).Milliseconds())
+	_, err = f.WriteString(totalElapsedTime)
+	if err != nil {
+		panic(err)
 	}
 }
