@@ -19,7 +19,6 @@ type Pipeline[T any] struct {
 	Stages        []fgl_stage.Stage[T]
 	InputChannel  chan fgl_metadata.InputMetadata[T]
 	OutputChannel chan fgl_metadata.OutputMetadata[T]
-	Done          chan struct{}
 	StartedAt     time.Time
 	CompletedAt   time.Time
 	Config        fgl_config.Config
@@ -44,7 +43,6 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 		Stages:        nil,
 		InputChannel:  in,
 		OutputChannel: out,
-		Done:          make(chan struct{}),
 		StartedAt:     time.Now().UTC(),
 		Config:        *config,
 	}
@@ -54,7 +52,6 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 // It processes the pipeline stages concurrently
 func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
 	semaphore := make(chan struct{}, pipeline.Config.MaxWorkers)
-	counter := 0
 
 	// Loop through each input coming from the input and process it through the pipeline
 	for inputValue := range inputQueue {
@@ -67,20 +64,12 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 
 			// Update the heap allocation
 			runtime.ReadMemStats(&m)
-
-			counter++
 		}
-
-		counter = 0
 
 		// Wait until a worker slot is available
 		semaphore <- struct{}{}
 
 		workerMetadata.IncrementActiveWorkers()
-
-		// if workerMetadata.GetActiveWorkers() >= pipeline.Config.MaxWorkers {
-		// 	fmt.Printf("WARN: Pipeline %s is at max workers. Waiting for a worker to be freed up...\n", pipeline.id)
-		// }
 
 		go func(fgl_metadata.InputMetadata[T]) {
 			now := time.Now().UTC()
@@ -136,8 +125,6 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 				fmt.Printf("ERROR: Pipeline %s failed with error %v\n", pipeline.GetID(), ctx.Err())
 				panic(ctx.Err())
 			}
-
-			pipeline.Done <- struct{}{}
 		}(inputValue)
 	}
 }
@@ -147,49 +134,8 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 	workerMetadata := fgl_metadata.NewWorkerMetadata[T]()
 
-	// inputQueue := make(chan fgl_metadata.InputMetadata[T])
-
-	// Spawn fixed number of goroutines
+	// Initialise the worker pool
 	go pipeline.initialiseWorkerPool(ctx, pipeline.InputChannel, workerMetadata)
-
-	// // Send input values to the input
-	// go func() {
-	// 	counter := 0
-
-	// 	for input := range pipeline.InputChannel {
-	// 		// Check the heap allocation
-	// 		m := runtime.MemStats{}
-	// 		runtime.ReadMemStats(&m)
-	// 		for {
-	// 			if counter < pipeline.Config.MaxWorkers && fgl_util.BytesToMB(m.HeapAlloc) < pipeline.Config.MaxMemoryMB {
-	// 				break
-	// 			}
-
-	// 			if fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
-	// 				fmt.Printf("WARN: Pipeline %s has exceeded the max memory limit. Current heap allocation: %v MiB. Waiting until memory is freed up...\n", pipeline.GetID(), fgl_util.BytesToMB(m.Sys))
-	// 				runtime.GC()
-
-	// 				// Allow the GC to settle
-	// 				time.Sleep(100 * time.Millisecond)
-
-	// 				// Update the heap allocation
-	// 				runtime.ReadMemStats(&m)
-	// 			}
-
-	// 			counter++
-	// 		}
-
-	// 		counter = 0
-
-	// 		select {
-	// 		case inputQueue <- input:
-	// 		case <-ctx.Done():
-	// 			return
-	// 		}
-	// 	}
-
-	// 	close(inputQueue)
-	// }()
 }
 
 // convertCurrentOutToNextIn converts output metadata to input metadata

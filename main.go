@@ -3,10 +3,13 @@ package main
 import (
 	"context"
 	"fmt"
+	"net/http"
 	"os"
 	"runtime"
 	"sync"
 	"time"
+
+	_ "net/http/pprof"
 
 	fgl_config "github.com/hkashwinkashyap/fastgoline/fgl/config"
 	fgl_metadata "github.com/hkashwinkashyap/fastgoline/fgl/metadata"
@@ -33,6 +36,11 @@ func logMemStats(f *os.File, counter int, pipelineNumber int, duration int64) {
 }
 
 func main() {
+	// Pprof
+	go func() {
+		fmt.Println(http.ListenAndServe("localhost:6060", nil))
+	}()
+
 	// Create log file
 	f, err := os.Create(fmt.Sprintf("fastgoline_test_%s.log", time.Now().Format("2006-01-02 15:04:05")))
 	if err != nil {
@@ -142,10 +150,10 @@ func main() {
 
 		// Send input values to pipeline1
 		for i := 0; i < 1000000; i++ {
-			in <- fgl_metadata.NewInputMetadata(intialValue)
+			in <- fgl_metadata.NewInputMetadata(intialValue * 10.0)
 			// Add delay if required
 			// time.Sleep(time.Microsecond * 500)
-			// intialValue += 0.05
+			intialValue += 10
 		}
 	}()
 
@@ -155,16 +163,17 @@ func main() {
 
 		// Send input values to pipeline2
 		for i := 0; i < 1000000; i++ {
-			in2 <- fgl_metadata.NewInputMetadata(intialValue)
+			in2 <- fgl_metadata.NewInputMetadata(intialValue / 10.0)
 			// Add delay if required
 			// time.Sleep(time.Microsecond * 500)
-			// intialValue -= 0.05
+			intialValue -= 0.125
 		}
 	}()
 
 	go func() {
 		counter := 0
-		for range out {
+		output := fgl_metadata.OutputMetadata[float64]{}
+		for output = range out {
 			counter++
 
 			if counter%10000 == 0 {
@@ -177,7 +186,7 @@ func main() {
 		}
 
 		line1 := fmt.Sprintf("Pipeline1 completed: %d items\n", counter)
-		line2 := fmt.Sprintf("Pipeline1 completed in %+vms\n", time.Since(startTime).Milliseconds())
+		line2 := fmt.Sprintf("Pipeline1 completed in %+vms with output: %+v\n", time.Since(startTime).Milliseconds(), output)
 
 		_, err = f.WriteString(line1 + line2)
 		if err != nil {
@@ -189,7 +198,8 @@ func main() {
 
 	go func() {
 		counter := 0
-		for range out2 {
+		output := fgl_metadata.OutputMetadata[float64]{}
+		for output = range out2 {
 			counter++
 
 			if counter%10000 == 0 {
@@ -202,7 +212,7 @@ func main() {
 		}
 
 		line1 := fmt.Sprintf("Pipeline2 completed: %d items\n", counter)
-		line2 := fmt.Sprintf("Pipeline2 completed in %+vms\n", time.Since(startTime).Milliseconds())
+		line2 := fmt.Sprintf("Pipeline2 completed in %+vms with output: %+v\n", time.Since(startTime).Milliseconds(), output)
 
 		_, err = f.WriteString(line1 + line2)
 		if err != nil {
