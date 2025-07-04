@@ -7,7 +7,6 @@ import (
 )
 
 // Config represents the configuration for the pipeline.
-// TODO - more to come
 type Config struct {
 	LogLevel    string
 	MaxWorkers  int
@@ -29,9 +28,9 @@ func getEnv(key string, defaultValue string) string {
 }
 
 // InitialiseConfig returns the configuration for the pipeline
+// Default LogLevel = LogLevelDebug
 // Default MaxWorkers = number of CPUs * 2
 // Default MaxMemoryMB = 1024
-// TODO - more to come
 func InitialiseConfig() *Config {
 	maxWorkers, err := strconv.Atoi(getEnv("FGL_MAX_WORKERS", strconv.Itoa(runtime.NumCPU()*2)))
 	if err != nil {

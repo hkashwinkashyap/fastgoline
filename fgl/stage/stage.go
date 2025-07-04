@@ -48,7 +48,7 @@ func NewStageFunction[T any](fn func(T) (T, error)) Stage[T] {
 				},
 				OutputValue: outputValue,
 				OutputTime:  time.Now().UTC(),
-				Duration:    time.Since(input.InputTime).Abs().Nanoseconds(),
+				Duration:    time.Since(input.InputTime).Nanoseconds(),
 				Err:         err,
 			}
 		}

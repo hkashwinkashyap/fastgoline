@@ -55,16 +55,6 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 
 	// Loop through each input coming from the input and process it through the pipeline
 	for inputValue := range inputQueue {
-		// Check the heap allocation
-		m := runtime.MemStats{}
-		runtime.ReadMemStats(&m)
-		for fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
-			fmt.Printf("WARN: Pipeline %s has exceeded the max memory limit. Current heap allocation: %v MiB. Waiting until memory is freed up...\n", pipeline.GetID(), fgl_util.BytesToMB(m.HeapAlloc))
-			runtime.GC()
-
-			// Update the heap allocation
-			runtime.ReadMemStats(&m)
-		}
 
 		// Wait until a worker slot is available
 		semaphore <- struct{}{}
@@ -127,6 +117,9 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 			}
 		}(inputValue)
 	}
+
+	// Return success
+	ctx.Done()
 }
 
 // RunPipeline runs the pipeline to process data.
@@ -136,6 +129,26 @@ func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
 
 	// Initialise the worker pool
 	go pipeline.initialiseWorkerPool(ctx, pipeline.InputChannel, workerMetadata)
+
+	// Kick off a goroutine to monitor memory usage and initiate GC
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				var m runtime.MemStats
+				runtime.ReadMemStats(&m)
+				if fgl_util.BytesToMB(m.HeapAlloc) >= pipeline.Config.MaxMemoryMB {
+					fmt.Printf("WARN: Pipeline %s memory high: %d MB\n", pipeline.id, fgl_util.BytesToMB(m.HeapAlloc))
+					runtime.GC()
+				}
+			}
+		}
+	}()
 }
 
 // convertCurrentOutToNextIn converts output metadata to input metadata
