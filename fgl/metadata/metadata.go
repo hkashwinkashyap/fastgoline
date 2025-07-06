@@ -45,34 +45,34 @@ type OutputMetadata[T any] struct {
 
 // WorkerMetadata is struct of worker metadata
 // It contains the number of active workers
-type WorkerMetadata[T any] struct {
+type WorkerMetadata struct {
 	mu            sync.RWMutex
 	activeWorkers int
 }
 
 // NewWorkerMetadata creates a new WorkerMetadata instance
-func NewWorkerMetadata[T any]() *WorkerMetadata[T] {
-	return &WorkerMetadata[T]{
+func NewWorkerMetadata() *WorkerMetadata {
+	return &WorkerMetadata{
 		activeWorkers: 0,
 	}
 }
 
 // GetActiveWorkers returns the number of active workers
-func (workerMetadata *WorkerMetadata[T]) GetActiveWorkers() int {
+func (workerMetadata *WorkerMetadata) GetActiveWorkers() int {
 	workerMetadata.mu.RLock()
 	defer workerMetadata.mu.RUnlock()
 	return workerMetadata.activeWorkers
 }
 
 // IncrementActiveWorkers sets the number of active workers
-func (workerMetadata *WorkerMetadata[T]) IncrementActiveWorkers() {
+func (workerMetadata *WorkerMetadata) IncrementActiveWorkers() {
 	workerMetadata.mu.Lock()
 	defer workerMetadata.mu.Unlock()
 	workerMetadata.activeWorkers++
 }
 
 // DecrementActiveWorkers sets the number of active workers
-func (workerMetadata *WorkerMetadata[T]) DecrementActiveWorkers() {
+func (workerMetadata *WorkerMetadata) DecrementActiveWorkers() {
 	workerMetadata.mu.Lock()
 	defer workerMetadata.mu.Unlock()
 	workerMetadata.activeWorkers--
