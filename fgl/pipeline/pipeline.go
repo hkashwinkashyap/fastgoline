@@ -50,7 +50,7 @@ func NewPipeline[T any](in chan fgl_metadata.InputMetadata[T], out chan fgl_meta
 
 // initialiseWorkerPool initialises the worker pool
 // It processes the pipeline stages concurrently
-func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata[T]) {
+func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueue chan fgl_metadata.InputMetadata[T], workerMetadata *fgl_metadata.WorkerMetadata) {
 	semaphore := make(chan struct{}, pipeline.Config.MaxWorkers)
 
 	// Loop through each input coming from the input and process it through the pipeline
@@ -86,9 +86,9 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 
 				currentOut = stage.TransformFunction(ctx, currentIn)
 				if currentOut.Err != nil {
-					ctx.Done()
-					fmt.Printf("ERR: Failed to process stage number %d {%+v} of pipeline %s: %s\n", index, stage, pipeline.id, currentOut.Err.Error())
-					panic(currentOut.Err)
+					errMessage := fmt.Sprintf("ERR: Failed to process stage number %d {%+v} of pipeline %s: %s\n", index, stage, pipeline.id, currentOut.Err.Error())
+					fmt.Println(errMessage)
+					break
 				}
 
 				if pipeline.Config.LogLevel == fgl_config.LogLevelDebug {
@@ -125,7 +125,7 @@ func (pipeline *Pipeline[T]) initialiseWorkerPool(ctx context.Context, inputQueu
 // RunPipeline runs the pipeline to process data.
 // It returns an error if any stage fails.
 func (pipeline *Pipeline[T]) RunPipeline(ctx context.Context) {
-	workerMetadata := fgl_metadata.NewWorkerMetadata[T]()
+	workerMetadata := fgl_metadata.NewWorkerMetadata()
 
 	// Initialise the worker pool
 	go pipeline.initialiseWorkerPool(ctx, pipeline.InputChannel, workerMetadata)
